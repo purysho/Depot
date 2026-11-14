@@ -1,0 +1,18 @@
+[submodule "vendor/needle"]
+	path = vendor/needle
+	url = https://github.com/purysho/Needle.git
+[submodule "vendor/relay"]
+	path = vendor/relay
+	url = https://github.com/purysho/Relay.git
+[submodule "vendor/pulse"]
+	path = vendor/pulse
+	url = https://github.com/purysho/Pulse.git
+[submodule "vendor/blackbox"]
+	path = vendor/blackbox
+	url = https://github.com/purysho/BLACKBOX.git
+[submodule "vendor/forge"]
+	path = vendor/forge
+	url = https://github.com/purysho/Forge.git
+[submodule "vendor/switchyard"]
+	path = vendor/switchyard
+	url = https://github.com/purysho/Switchyard.git

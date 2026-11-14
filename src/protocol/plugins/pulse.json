@@ -1,0 +1,30 @@
+{
+  "id": "pulse",
+  "name": "Pulse",
+  "version": "0.1.0",
+  "description": "Process and network relationship monitor.",
+  "panel": {
+    "icon": "Activity",
+    "label": "Pulse",
+    "color": "#f07b2b",
+    "component": "panels/pulse/PulsePanel"
+  },
+  "workspace_scoped": true,
+  "events": {
+    "publishes": [
+      "pulse.port_closed",
+      "pulse.port_listening",
+      "pulse.process_exited",
+      "pulse.snapshot"
+    ],
+    "subscribes": [
+      "forge.step_failed",
+      "switchyard.service_unhealthy"
+    ]
+  },
+  "embed": {
+    "mode": "native",
+    "bridge": "plugins/pulse"
+  },
+  "min_depot": "0.1.0"
+}

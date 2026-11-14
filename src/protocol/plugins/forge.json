@@ -1,0 +1,30 @@
+{
+  "id": "forge",
+  "name": "Forge",
+  "version": "0.1.0",
+  "description": "Workflow runner for local automations.",
+  "panel": {
+    "icon": "Workflow",
+    "label": "Forge",
+    "color": "#d29922",
+    "component": "panels/forge/ForgePanel"
+  },
+  "workspace_scoped": true,
+  "events": {
+    "publishes": [
+      "forge.run_finished",
+      "forge.run_started",
+      "forge.step_failed",
+      "forge.step_started",
+      "forge.step_succeeded"
+    ],
+    "subscribes": [
+      "needle.file_found"
+    ]
+  },
+  "embed": {
+    "mode": "native",
+    "bridge": "plugins/forge"
+  },
+  "min_depot": "0.1.0"
+}

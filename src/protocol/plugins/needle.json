@@ -1,0 +1,34 @@
+{
+  "id": "needle",
+  "name": "Needle",
+  "version": "0.1.0",
+  "description": "Local file search and indexing.",
+  "panel": {
+    "icon": "Search",
+    "label": "Needle",
+    "color": "#3fb950",
+    "component": "panels/needle/NeedlePanel"
+  },
+  "workspace_scoped": true,
+  "events": {
+    "publishes": [
+      "needle.file_found",
+      "needle.index_complete",
+      "needle.index_started",
+      "needle.search_complete"
+    ],
+    "subscribes": []
+  },
+  "embed": {
+    "mode": "native",
+    "bridge": "plugins/needle"
+  },
+  "min_depot": "0.1.0",
+  "handoff": {
+    "app": "Needle",
+    "args": [
+      "--root",
+      "{workspace.tools.needle.roots[0]}"
+    ]
+  }
+}

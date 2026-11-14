@@ -1,0 +1,138 @@
+{
+  "$comment": "The event catalogue: every bus event type, whether the session timeline records it, and who may publish it (core = the depot-core sidecar, backend = Depot's Rust code, frontend = a panel, for user actions only). Read by Rust (src-tauri/src/bus.rs) and TypeScript (src/types/events.ts). Payloads are documented in docs/PLUGIN_PROTOCOL.md.",
+  "version": 1,
+  "events": {
+    "depot.session_started": {
+      "timeline": true,
+      "origin": "backend"
+    },
+    "depot.session_continued": {
+      "timeline": true,
+      "origin": "backend"
+    },
+    "depot.session_ended": {
+      "timeline": true,
+      "origin": "backend"
+    },
+    "depot.workspace_opened": {
+      "timeline": true,
+      "origin": "backend"
+    },
+    "depot.panel_opened": {
+      "timeline": true,
+      "origin": "frontend"
+    },
+    "switchyard.session_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "switchyard.session_stopped": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "switchyard.service_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "switchyard.service_ready": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "switchyard.service_unhealthy": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "switchyard.service_stopped": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "needle.index_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "needle.index_complete": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "needle.search_complete": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "needle.file_found": {
+      "timeline": true,
+      "origin": "frontend"
+    },
+    "relay.request_sent": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "relay.response_received": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "relay.request_failed": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "relay.mock_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "relay.mock_stopped": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "pulse.snapshot": {
+      "timeline": false,
+      "origin": "core"
+    },
+    "pulse.port_listening": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "pulse.port_closed": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "pulse.process_exited": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "blackbox.scan_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "blackbox.scan_complete": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "blackbox.scan_failed": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "blackbox.review_complete": {
+      "timeline": true,
+      "origin": "backend"
+    },
+    "forge.run_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "forge.step_started": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "forge.step_succeeded": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "forge.step_failed": {
+      "timeline": true,
+      "origin": "core"
+    },
+    "forge.run_finished": {
+      "timeline": true,
+      "origin": "core"
+    }
+  }
+}

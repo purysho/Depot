@@ -1,0 +1,34 @@
+{
+  "id": "blackbox",
+  "name": "BLACKBOX",
+  "version": "0.1.0",
+  "description": "Repository forensics and code analysis.",
+  "panel": {
+    "icon": "ScanSearch",
+    "label": "BLACKBOX",
+    "color": "#f85149",
+    "component": "panels/blackbox/BlackboxPanel"
+  },
+  "workspace_scoped": true,
+  "events": {
+    "publishes": [
+      "blackbox.review_complete",
+      "blackbox.scan_complete",
+      "blackbox.scan_failed",
+      "blackbox.scan_started"
+    ],
+    "subscribes": []
+  },
+  "embed": {
+    "mode": "native",
+    "bridge": "plugins/blackbox"
+  },
+  "min_depot": "0.1.0",
+  "handoff": {
+    "app": "BLACKBOX",
+    "args": [
+      "--repo",
+      "{workspace.tools.blackbox.repo}"
+    ]
+  }
+}

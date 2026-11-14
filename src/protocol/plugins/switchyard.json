@@ -1,0 +1,31 @@
+{
+  "id": "switchyard",
+  "name": "Switchyard",
+  "version": "0.1.0",
+  "description": "Workspace orchestration, service graphs, run configs.",
+  "panel": {
+    "icon": "Waypoints",
+    "label": "Switchyard",
+    "color": "#58a6ff",
+    "component": "panels/switchyard/SwitchyardPanel"
+  },
+  "workspace_scoped": true,
+  "events": {
+    "publishes": [
+      "switchyard.service_ready",
+      "switchyard.service_started",
+      "switchyard.service_stopped",
+      "switchyard.service_unhealthy",
+      "switchyard.session_started",
+      "switchyard.session_stopped"
+    ],
+    "subscribes": [
+      "blackbox.scan_complete"
+    ]
+  },
+  "embed": {
+    "mode": "native",
+    "bridge": "plugins/switchyard"
+  },
+  "min_depot": "0.1.0"
+}
