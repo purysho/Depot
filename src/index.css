@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind v4 reads its theme from CSS, so the plan's tailwind.config.ts is
+ * expressed here instead. Values must match src/design/tokens.ts; the test in
+ * src/design/tokens.test.ts checks every one of them.
+ *
+ * The `initial` resets remove Tailwind's default palette, type scale and fonts,
+ * so a class such as `bg-blue-500` or `text-lg` from Tailwind's own scale does
+ * not exist and cannot drift away from the tokens. `static` keeps every token
+ * in the output as a CSS variable even when no utility class uses it, because
+ * components also read them directly (var(--color-tool-needle)).
+ */
+@theme static {
+  --color-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+
+  --spacing: 4px;
+
+  --color-bg-base: #0d1117;
+  --color-bg-surface: #161b22;
+  --color-bg-overlay: #21262d;
+  --color-bg-border: #30363d;
+
+  --color-text-primary: #e6edf3;
+  --color-text-secondary: #8b949e;
+  --color-text-muted: #484f58;
+  --color-text-link: #58a6ff;
+
+  --color-success: #3fb950;
+  --color-warning: #d29922;
+  --color-error: #f85149;
+  --color-info: #58a6ff;
+  --color-pending: #a371f7;
+
+  --color-tool-switchyard: #58a6ff;
+  --color-tool-needle: #3fb950;
+  --color-tool-relay: #a371f7;
+  --color-tool-pulse: #f07b2b;
+  --color-tool-blackbox: #f85149;
+  --color-tool-forge: #d29922;
+
+  --color-button-primary-bg: #1f6feb;
+  --color-button-primary-border: #388bfd;
+  --color-button-primary-hover: #388bfd;
+  --color-button-primary-text: #ffffff;
+
+  --color-badge-success: #1b2a1b;
+  --color-badge-warning: #2a2010;
+  --color-badge-error: #2a1515;
+  --color-badge-pending: #1e1a2e;
+  --color-badge-info: #1a2234;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1.25;
+  --text-sm: 0.75rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.5;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5;
+  --text-lg: 1rem;
+  --text-lg--line-height: 1.5;
+  --text-xl: 1.125rem;
+  --text-xl--line-height: 1.25;
+  --text-2xl: 1.375rem;
+  --text-2xl--line-height: 1.25;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-loose: 1.75;
+
+  --radius-sm: 4px;
+  --radius-base: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-bg-base);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+    color-scheme: dark;
+  }
+
+  /* One focus style everywhere: visible for keyboard users only. */
+  :focus-visible {
+    outline: 2px solid var(--color-text-link);
+    outline-offset: 2px;
+  }
+}
