@@ -1,0 +1,307 @@
+import { Play, Plus, Square, Trash, Workflow } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Badge, Button, Card, EmptyState, ErrorNote, Field, Input, PanelHeader, SectionTitle, Select, Textarea } from "../../design";
+import { cn } from "../../design/cn";
+import { events, ipc, listen, type StreamMessage } from "../../ipc";
+import { useBusEvent } from "../../store/bus";
+import { useIntent, useLinks, useNav } from "../../store/integrations";
+import { useWorkspace } from "../../store/workspace";
+import { STEP_TYPES, type ForgeStep, type ForgeWorkflow, type StepType } from "../../types/tools";
+import { NoWorkspace } from "../shared/NoWorkspace";
+import { useTask } from "../shared/useTask";
+
+/** Each step type's fields, as Forge's own step editor has them (forge/app.py). */
+export const FIELDS: Record<StepType, Array<[key: string, label: string, multiline?: boolean]>> = {
+  command: [["command", "Command"], ["cwd", "Working folder"]],
+  copy: [["source", "Source"], ["target", "Target"]],
+  move: [["source", "Source"], ["target", "Target"]],
+  mkdir: [["path", "Folder"]],
+  write: [["path", "File"], ["content", "Content", true]],
+  delete: [["path", "Path to delete"]],
+  http: [["method", "Method"], ["url", "URL"]],
+  wait: [["seconds", "Seconds"]],
+  open: [["path", "File, folder or URL"]],
+};
+
+/** Where a path from Needle goes for each step type. */
+const PATH_FIELD: Partial<Record<StepType, string>> = { copy: "source", move: "source", write: "path", delete: "path", open: "path", mkdir: "path" };
+
+type StepState = "running" | "done" | "failed";
+
+interface RunView {
+  runId: string;
+  log: string[];
+  steps: Record<number, StepState>;
+  failedPid: Record<number, number | null>;
+  outcome: string | null;
+}
+
+export function ForgePanel() {
+  const context = useWorkspace((s) => s.context);
+  const found = useLinks((s) => s.foundFiles);
+  const go = useNav((s) => s.go);
+  const intent = useIntent("forge");
+  const [workflows, setWorkflows] = useState<ForgeWorkflow[]>([]);
+  const [selected, setSelected] = useState(0);
+  // A file chosen in Needle opens the step editor with the path filled in.
+  const [draft, setDraft] = useState<ForgeStep | null>(
+    intent ? { type: "open", name: "", config: { path: intent.addPath }, timeout: 0, continue_on_error: false } : null,
+  );
+  const [newName, setNewName] = useState("");
+  const [run, setRun] = useState<RunView | null>(null);
+  const runRef = useRef<RunView | null>(null);
+  useEffect(() => {
+    runRef.current = run;
+  }, [run]);
+  const task = useTask();
+
+  const load = useCallback(() => {
+    ipc.forgeList().then(setWorkflows, () => setWorkflows([]));
+  }, []);
+  useEffect(() => {
+    if (context) load();
+  }, [context, load]);
+
+  // Live log lines for the current run.
+  useEffect(() => {
+    const off = listen<StreamMessage>(events.stream, (m) => {
+      if (m.name !== "forge.log") return;
+      setRun((r) => (r && m.params.run_id === r.runId ? { ...r, log: [...r.log, String(m.params.line)].slice(-500) } : r));
+    });
+    return () => void off.then((f) => f());
+  }, []);
+
+  const mine = <T extends { run_id: string }>(p: T) => runRef.current?.runId === p.run_id;
+  useBusEvent("forge.step_started", ({ payload }) => {
+    if (mine(payload)) setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "running" } });
+  });
+  useBusEvent("forge.step_succeeded", ({ payload }) => {
+    if (mine(payload)) setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "done" } });
+  });
+  useBusEvent("forge.step_failed", ({ payload }) => {
+    if (mine(payload))
+      setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "failed" }, failedPid: { ...r.failedPid, [payload.step_index]: payload.pid } });
+  });
+  useBusEvent("forge.run_finished", ({ payload }) => {
+    if (mine(payload)) setRun((r) => r && { ...r, outcome: payload.outcome });
+  });
+
+  if (!context) return <NoWorkspace tool="Forge" />;
+
+  const save = (next: ForgeWorkflow[]) =>
+    task.run(async () => {
+      await ipc.forgeSave(next);
+      setWorkflows(next);
+    });
+
+  const workflow = workflows[selected];
+  const running = run !== null && run.outcome === null;
+
+  const addWorkflow = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newName.trim()) return;
+    void save([...workflows, { name: newName.trim(), description: "", steps: [] }]).then(() => {
+      setSelected(workflows.length);
+      setNewName("");
+    });
+  };
+
+  const addStep = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!draft || !workflow) return;
+    const step = { ...draft, config: draft.type === "wait" ? { seconds: Number(draft.config.seconds) || 1 } : draft.config };
+    void save(workflows.map((w, i) => (i === selected ? { ...w, steps: [...w.steps, step] } : w))).then(() => setDraft(null));
+  };
+
+  const removeStep = (index: number) =>
+    save(workflows.map((w, i) => (i === selected ? { ...w, steps: w.steps.filter((_, j) => j !== index) } : w)));
+
+  const start = () =>
+    task.run(async () => {
+      const runId = await ipc.forgeRun(selected);
+      setRun({ runId, log: [], steps: {}, failedPid: {}, outcome: null });
+    });
+
+  return (
+    <>
+      <PanelHeader icon={Workflow} color="var(--color-tool-forge)" title="Forge" subtitle="Workflows are kept in this workspace." />
+      {task.error ? <ErrorNote className="mb-3">{task.error}</ErrorNote> : null}
+      <div className="grid gap-6 lg:grid-cols-[16rem_minmax(0,1fr)]">
+        <aside>
+          <SectionTitle>Workflows</SectionTitle>
+          <ul className="m-0 mb-3 grid list-none gap-1 p-0">
+            {workflows.map((w, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => setSelected(i)}
+                  aria-current={i === selected ? "true" : undefined}
+                  className={cn("w-full rounded-sm px-2 py-1 text-left text-sm hover:bg-bg-overlay", i === selected && "bg-bg-overlay")}
+                >
+                  {w.name} <span className="text-xs text-text-secondary">· {w.steps.length}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <form onSubmit={addWorkflow} className="flex gap-2">
+            <Input aria-label="New workflow name" placeholder="New workflow" value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <Button type="submit" variant="ghost" aria-label="Add workflow" disabled={!newName.trim()}>
+              <Plus aria-hidden="true" />
+            </Button>
+          </form>
+        </aside>
+
+        {workflow ? (
+          <div className="grid min-w-0 content-start gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="m-0 flex-1 text-lg font-semibold">{workflow.name}</h2>
+              {running ? (
+                <Button variant="ghost" onClick={() => task.run(() => ipc.forgeStop(run!.runId))}>
+                  <Square aria-hidden="true" />
+                  Stop
+                </Button>
+              ) : (
+                <Button onClick={start} disabled={workflow.steps.length === 0 || task.busy}>
+                  <Play aria-hidden="true" />
+                  Run
+                </Button>
+              )}
+              <Button variant="ghost" onClick={() => setDraft({ type: "command", name: "", config: {}, timeout: 0, continue_on_error: false })}>
+                <Plus aria-hidden="true" />
+                Add step
+              </Button>
+            </div>
+
+            <ol className="m-0 grid list-none gap-1 p-0">
+              {workflow.steps.map((step, i) => {
+                const state = run?.steps[i];
+                const pid = run?.failedPid[i];
+                return (
+                  <li key={i} className="flex items-center gap-2 rounded-md border border-bg-border bg-bg-surface px-3 py-2 text-sm">
+                    <span className="w-5 text-right font-mono text-xs text-text-secondary">{i + 1}</span>
+                    <span className="w-16 font-mono text-xs text-text-secondary">{step.type}</span>
+                    <span className="min-w-0 flex-1 truncate">{step.name || describeStep(step)}</span>
+                    {state === "running" ? <Badge tone="pending">running</Badge> : null}
+                    {state === "done" ? <Badge tone="success">done</Badge> : null}
+                    {state === "failed" ? <Badge tone="error">failed</Badge> : null}
+                    {state === "failed" && pid ? (
+                      <button type="button" className="text-xs text-text-link hover:underline" onClick={() => go("pulse", { tool: "pulse", pid })}>
+                        Show in Pulse →
+                      </button>
+                    ) : null}
+                    <Button variant="ghost" aria-label={`Remove step ${i + 1}`} onClick={() => removeStep(i)} disabled={running}>
+                      <Trash aria-hidden="true" />
+                    </Button>
+                  </li>
+                );
+              })}
+            </ol>
+            {workflow.steps.length === 0 && !draft ? <p className="m-0 text-sm text-text-secondary">No steps yet. Add the first one.</p> : null}
+
+            {draft ? (
+              <Card>
+                <form onSubmit={addStep} className="grid gap-3">
+                  <div className="flex flex-wrap gap-3">
+                    <Field label="Step type">
+                      {(id) => (
+                        <Select
+                          id={id}
+                          value={draft.type}
+                          onChange={(e) => {
+                            const type = e.target.value as StepType;
+                            // Keep a path the person already entered when switching type.
+                            const path = Object.values(draft.config).find((v) => typeof v === "string" && v.includes("/"));
+                            const key = PATH_FIELD[type];
+                            setDraft({ ...draft, type, config: key && path ? { [key]: path } : {} });
+                          }}
+                        >
+                          {STEP_TYPES.map((t) => (
+                            <option key={t}>{t}</option>
+                          ))}
+                        </Select>
+                      )}
+                    </Field>
+                    <Field label="Label (optional)" className="flex-1">
+                      {(id) => <Input id={id} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />}
+                    </Field>
+                  </div>
+                  {FIELDS[draft.type].map(([key, label, multiline]) => (
+                    <Field key={key} label={label}>
+                      {(id) =>
+                        multiline ? (
+                          <Textarea id={id} rows={4} value={String(draft.config[key] ?? "")} onChange={(e) => setDraft({ ...draft, config: { ...draft.config, [key]: e.target.value } })} />
+                        ) : (
+                          <Input id={id} value={String(draft.config[key] ?? "")} onChange={(e) => setDraft({ ...draft, config: { ...draft.config, [key]: e.target.value } })} />
+                        )
+                      }
+                    </Field>
+                  ))}
+                  {found.length && PATH_FIELD[draft.type] ? (
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <span className="text-text-secondary">From Needle:</span>
+                      {found.slice(0, 5).map((f) => (
+                        <button
+                          key={f.path}
+                          type="button"
+                          className="max-w-64 truncate rounded-full border border-bg-border px-2 py-0.5 font-mono text-xs hover:border-text-link"
+                          onClick={() => setDraft({ ...draft, config: { ...draft.config, [PATH_FIELD[draft.type]!]: f.path } })}
+                          title={f.path}
+                        >
+                          {f.path.split(/[\\/]/).pop()}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="flex gap-2">
+                    <Button type="submit">Add step</Button>
+                    <Button variant="ghost" onClick={() => setDraft(null)}>
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              </Card>
+            ) : null}
+
+            {run ? (
+              <section aria-label="Run log">
+                <SectionTitle aside={run.outcome ? <Badge tone={run.outcome === "completed" ? "success" : run.outcome === "stopped" ? "info" : "error"}>{run.outcome}</Badge> : <Badge tone="pending">running</Badge>}>
+                  Log
+                </SectionTitle>
+                <pre className="m-0 max-h-80 overflow-auto rounded-md border border-bg-border bg-bg-surface p-3 font-mono text-xs whitespace-pre-wrap">
+                  {run.log.join("\n") || "Starting…"}
+                </pre>
+              </section>
+            ) : null}
+          </div>
+        ) : (
+          <EmptyState
+            icon={Workflow}
+            title="No workflows yet"
+            description={
+              draft
+                ? `Name a workflow on the left to add ${String(Object.values(draft.config)[0] ?? "the file").split(/[\\/]/).pop()} to it.`
+                : "Name a workflow on the left, then add steps: commands, file operations, HTTP calls."
+            }
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+function describeStep(step: ForgeStep): string {
+  const c = step.config;
+  switch (step.type) {
+    case "command":
+      return String(c.command ?? "Run command");
+    case "copy":
+    case "move":
+      return `${step.type === "copy" ? "Copy" : "Move"} ${c.source ?? ""} → ${c.target ?? ""}`;
+    case "http":
+      return `${c.method ?? "GET"} ${c.url ?? ""}`;
+    case "wait":
+      return `Wait ${c.seconds ?? 1}s`;
+    default:
+      return `${step.type} ${c.path ?? ""}`;
+  }
+}

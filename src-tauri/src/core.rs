@@ -80,24 +80,24 @@ pub struct Launch {
 }
 
 impl Launch {
-    /// 1. `$DEPOT_CORE` — an executable to run instead (development, testing).
-    /// 2. The bundled sidecar next to Depot's own executable (release builds).
-    /// 3. In debug builds only: `python -m depot_core` from this source tree.
+    /// 1. `$DEPOT_CORE` — an executable to run instead (testing a packaged sidecar).
+    /// 2. Debug builds: `python -m depot_core` from this source tree, always,
+    ///    so a stale packaged sidecar left in target/ can never shadow edits.
+    /// 3. Release builds: the bundled sidecar next to Depot's own executable.
     pub fn discover() -> Result<Self> {
         if let Some(custom) = std::env::var_os("DEPOT_CORE") {
             return Ok(Self { program: custom.into(), args: vec![], cwd: None });
         }
-        let exe_name = if cfg!(windows) { "depot-core.exe" } else { "depot-core" };
-        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)) {
-            let bundled = dir.join(exe_name);
-            if bundled.is_file() {
-                return Ok(Self { program: bundled, args: vec![], cwd: None });
-            }
-        }
         if cfg!(debug_assertions) {
             return Ok(Self::from_source());
         }
-        Err(DepotError::new(ErrorKind::Unavailable, "depot-core is missing from this installation"))
+        let exe_name = if cfg!(windows) { "depot-core.exe" } else { "depot-core" };
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.join(exe_name)))
+            .filter(|bundled| bundled.is_file())
+            .map(|program| Self { program, args: vec![], cwd: None })
+            .ok_or_else(|| DepotError::new(ErrorKind::Unavailable, "depot-core is missing from this installation"))
     }
 
     /// Run the sidecar from source with the system Python (3.10+).

@@ -16,8 +16,14 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Rust's end-to-end sidecar test and debug builds run depot-core from source.
+      DEPOT_PYTHON: python
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The six tools' cores are pinned submodules under vendor/.
+          submodules: true
 
       - name: Install Linux system libraries for Tauri
         if: runner.os == 'Linux'
@@ -37,9 +43,27 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+
+      - name: depot-core tests (against the pinned tool cores)
+        run: python -m unittest discover -s core/tests -v
+
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: npm run tauri build -- --debug
+
+      - name: Build the depot-core sidecar
+        run: |
+          python -m pip install pyinstaller
+          python scripts/build-core.py
+
+      - name: Smoke-test the packaged sidecar
+        shell: bash
+        run: python scripts/smoke-core.py src-tauri/binaries/depot-core-*
+
+      - run: npm run tauri build -- --debug --config src-tauri/tauri.bundle.conf.json

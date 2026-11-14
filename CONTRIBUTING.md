@@ -4,22 +4,23 @@
 
 - Bug reports with reproduction steps and platform details
 - Platform-specific edge cases (macOS and Linux especially welcome)
-- Feedback on the plugin protocol and event catalogue before the panels are built
+- Trying Depot on Windows and macOS: CI builds and tests there, but no one has used it by hand yet
 - README corrections and documentation improvements
 
 ## How to run from source
 
-Requirements: Node.js 22.12+, Rust (stable), and the
+Requirements: Node.js 22.12+, Rust (stable), Python 3.10+, and the
 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform.
 
 ```bash
+git submodule update --init
 npm install
 npm run tauri dev
 ```
 
 The frontend alone runs in a browser with `npm run dev` (port 1420). Calls to
-the Rust side return empty results there, so most UI work does not need the
-desktop shell. `http://localhost:1420/#gallery` shows every shared component.
+the Rust side fail there with an "unavailable" message, so layout and
+component work does not need the desktop shell; panels need `npm run tauri dev`. `http://localhost:1420/#gallery` shows every shared component.
 
 ## How to run tests
 
@@ -27,8 +28,20 @@ desktop shell. `http://localhost:1420/#gallery` shows every shared component.
 npm run typecheck
 npm run lint
 npm test
+python -m unittest discover -s core/tests
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
+## Where a change belongs
+
+- **A tool's behaviour** (how Needle ranks, what BLACKBOX flags) belongs in
+  that tool's repository. Depot picks it up when its submodule pin under
+  `vendor/` is bumped; `core/README.md` shows how.
+- **How Depot calls a tool** belongs in `core/depot_core/tools/<tool>.py`
+  (the adapter) and `src-tauri/src/plugins/<tool>.rs` (the bridge).
+- **A new event** goes in `src/protocol/events.json`, the publishing tool's
+  manifest in `src/protocol/plugins/`, `src/types/events.ts`, and
+  `docs/PLUGIN_PROTOCOL.md`. Tests fail until all four agree.
 
 ## Pull request checklist
 
@@ -36,7 +49,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - [ ] New behaviour is covered by a test, or the reason it cannot be is explained
 - [ ] `CHANGELOG.md` updated under `## [Unreleased]`
 - [ ] A new Tauri command has a typed wrapper in `src/ipc.ts` and only the permission it needs in `src-tauri/capabilities/`
-- [ ] A new event type is added to the catalogue in `docs/PLUGIN_PROTOCOL.md`
+- [ ] A new event type is in `events.json`, its manifest, `src/types/events.ts` and `docs/PLUGIN_PROTOCOL.md`
 - [ ] UI changes were checked with the keyboard, and a screenshot is attached
 
 ## Code style

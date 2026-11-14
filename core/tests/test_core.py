@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -257,6 +258,68 @@ class SwitchyardTests(unittest.TestCase):
             self.assertIn("switchyard.session_stopped", stopped)
             # Stopping on purpose is not a health problem.
             self.assertNotIn("switchyard.service_unhealthy", stopped)
+
+
+class HostGoneTests(unittest.TestCase):
+    def test_send_never_raises_after_the_host_has_gone(self):
+        h = Harness()
+        closed = io.StringIO()
+        closed.close()
+        h.server._out = closed
+        h.server.send({"event": "x", "payload": {}})  # must not raise
+        self.assertTrue(h.server.host_gone)
+
+    def test_services_stop_when_depot_dies_without_warning(self):
+        """Depot killed: both pipes close at once. Shutdown must still stop the
+        session's services, though every event it publishes on the way fails."""
+        import switchyard_core as sy
+
+        with tempfile.TemporaryDirectory() as d:
+            state_path = Path(d) / "state.json"
+            pidfile = Path(d) / "pid"
+            script = Path(d) / "sleeper.py"
+            script.write_text(f"import os, time\nopen({str(pidfile)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n", encoding="utf-8")
+            project = sy.new_project(d, "demo")
+            service = sy.new_service(project, "sleeper", f'"{sys.executable}" "{script}"')
+            session = sy.new_session("dev", [service.id])
+            sy.save_state(sy.WorkspaceState(projects=[project], services=[service], sessions=[session]), state_path)
+
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "depot_core"], cwd=CORE, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True,
+            )
+            params = {"session_id": session.id, "state_path": str(state_path), "runtime_path": str(Path(d) / "rt.json")}
+            proc.stdin.write(json.dumps({"id": 1, "method": "switchyard.start_session", "params": params}) + "\n")
+            proc.stdin.flush()
+            reply = next(m for m in map(json.loads, iter(proc.stdout.readline, "")) if m.get("id") == 1)
+            self.assertTrue(reply["result"]["started"], reply)
+            deadline = time.time() + 15
+            while not pidfile.exists() and time.time() < deadline:
+                time.sleep(0.1)
+            pid = int(pidfile.read_text())
+
+            proc.stdout.close()  # the host is gone: nobody reads any more…
+            proc.stdin.close()   # …and nobody writes
+            proc.wait(timeout=20)
+            deadline = time.time() + 10
+            while _alive(pid) and time.time() < deadline:
+                time.sleep(0.1)
+            self.assertFalse(_alive(pid), "the service outlived Depot")
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A zombie is dead for our purposes.
+    try:
+        return Path(f"/proc/{pid}/status").read_text().find("State:\tZ") == -1
+    except OSError:
+        return True
 
 
 class EntryPointTests(unittest.TestCase):

@@ -16,6 +16,8 @@ so sys.stdout is redirected to stderr while handlers run.
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
 import threading
 import traceback
@@ -59,13 +61,16 @@ Handler = Callable[[dict[str, Any], Context], Any]
 
 
 class Server:
-    def __init__(self, out: IO[str], workers: int = 8):
+    # Long-running work (a Forge run) holds a worker until it ends, so keep
+    # enough that quick requests such as Pulse snapshots are never starved.
+    def __init__(self, out: IO[str], workers: int = 16):
         self._out = out
         self._lock = threading.Lock()
         self._handlers: dict[str, Handler] = {}
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="depot-core")
         self.context = Context(self)
         self.state: dict[str, Any] = {}  # per-tool state that outlives one request
+        self.host_gone = False
 
     def register(self, method: str, handler: Handler) -> None:
         if method in self._handlers:
@@ -76,10 +81,18 @@ class Server:
         return sorted(self._handlers)
 
     def send(self, message: dict[str, Any]) -> None:
+        """Write one message. Never raises: once Depot has gone, messages are
+        dropped, so shutdown code that publishes events ("stopping web…")
+        still gets on with stopping things."""
         line = json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str)
         with self._lock:
-            self._out.write(line + "\n")
-            self._out.flush()
+            if self.host_gone:
+                return
+            try:
+                self._out.write(line + "\n")
+                self._out.flush()
+            except (OSError, ValueError):  # broken pipe, or stdout already closed
+                self.host_gone = True
 
     def handle_line(self, line: str) -> None:
         line = line.strip()
@@ -131,18 +144,30 @@ def build_server(out: IO[str]) -> Server:
     return server
 
 
+def stop_everything(server: Server) -> None:
+    """Stop running workflows and sessions: nothing Depot started outlives it."""
+    from depot_core.tools import forge, switchyard
+
+    forge.stop_all(server)
+    switchyard.stop_all(server)
+
+
 def main() -> None:
     # Keep the protocol stream for ourselves; anything a tool core prints goes to stderr.
     protocol_out = sys.stdout
     sys.stdout = sys.stderr
     server = build_server(protocol_out)
+
+    def on_terminate(_signum: int, _frame: object) -> None:
+        stop_everything(server)
+        os._exit(0)
+
+    # Asked to stop by the OS (logout, `kill`): clean up the same way.
+    signal.signal(signal.SIGTERM, on_terminate)
     try:
         for line in sys.stdin:
             server.handle_line(line)
     finally:
-        # stdin closed: Depot quit or restarted us. Stop what is still running.
-        from depot_core.tools import forge, switchyard
-
-        forge.stop_all(server)
-        switchyard.stop_all(server)
+        # stdin closed: Depot quit, crashed or restarted us.
+        stop_everything(server)
         server.shutdown()

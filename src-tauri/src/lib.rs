@@ -62,7 +62,12 @@ pub fn run() {
                     let _ = route_app.emit(STREAM_EVENT, json!({"name": name, "params": params}));
                 }
             });
-            let launch = Launch::discover().unwrap_or_else(|_| Launch::from_source());
+            // A release build without its sidecar is broken; say so on stderr and in
+            // every tool's error rather than refusing to open the window.
+            let launch = Launch::discover().unwrap_or_else(|err| {
+                eprintln!("depot: {err}");
+                Launch { program: "depot-core".into(), args: vec![], cwd: None }
+            });
             let core = Arc::new(CoreClient::new(launch, on_message));
 
             app.manage(AppState { home: home.clone(), workspace: Mutex::new(None), bus, core, ocr: Default::default() });

@@ -12,6 +12,7 @@ from depot_core.server import Context, Server
 LISTEN_STATES = {"listen", "listening"}
 
 _lock = threading.Lock()
+_collect_lock = threading.Lock()
 
 
 def _port(address: str) -> int | None:
@@ -45,6 +46,13 @@ def listening_ports(processes: list[ProcessInfo]) -> list[dict[str, Any]]:
 
 
 def snapshot(_params: dict[str, Any], ctx: Context, collect=None) -> dict[str, Any]:
+    # One snapshot at a time: the poller and a manual refresh could otherwise
+    # both diff against the same previous set and announce a port twice.
+    with _collect_lock:
+        return _snapshot(ctx, collect)
+
+
+def _snapshot(ctx: Context, collect=None) -> dict[str, Any]:
     processes = (collect or providers.collect_processes)()
     listening = listening_ports(processes)
     current = {(x["pid"], x["port"]): x for x in listening}

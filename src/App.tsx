@@ -1,23 +1,70 @@
-import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
-import { EmptyState, ExternalLink, Sidebar, StatusBar } from "./design";
+import { Sidebar, StatusBar } from "./design";
 import type { ToolId } from "./design/tokens";
 import { Gallery } from "./design/Gallery";
-import { appVersion } from "./ipc";
-import { toolById, tools } from "./panels/registry";
+import { ipc } from "./ipc";
+import { BlackboxPanel } from "./panels/blackbox/BlackboxPanel";
+import { ForgePanel } from "./panels/forge/ForgePanel";
+import { NeedlePanel } from "./panels/needle/NeedlePanel";
+import { PulsePanel } from "./panels/pulse/PulsePanel";
+import { tools } from "./panels/registry";
+import { RelayPanel } from "./panels/relay/RelayPanel";
+import { SettingsPanel } from "./panels/SettingsPanel";
+import { SwitchyardPanel } from "./panels/switchyard/SwitchyardPanel";
+import { startBus } from "./store/bus";
+import { startIntegrations, useLinks, useNav } from "./store/integrations";
+import { startTimeline } from "./store/timeline";
+import { startWorkspace, useWorkspace } from "./store/workspace";
 
-type View = ToolId | "settings";
+const panels: Record<ToolId, () => React.JSX.Element> = {
+  switchyard: SwitchyardPanel,
+  needle: NeedlePanel,
+  relay: RelayPanel,
+  pulse: PulsePanel,
+  blackbox: BlackboxPanel,
+  forge: ForgePanel,
+};
+
+/** Start the shared services once for the life of the window. */
+function useServices(): void {
+  useEffect(() => {
+    const stops: Array<() => void> = [];
+    let cancelled = false;
+    const keep = (stop: () => void) => (cancelled ? stop() : stops.push(stop));
+    void startBus().then(keep);
+    void startIntegrations().then(keep);
+    void startWorkspace().then(keep);
+    keep(startTimeline());
+    return () => {
+      cancelled = true;
+      stops.forEach((stop) => stop());
+    };
+  }, []);
+}
 
 export default function App() {
-  const [view, setView] = useState<View>("switchyard");
+  useServices();
+  const view = useNav((s) => s.view);
+  const go = useNav((s) => s.go);
+  const context = useWorkspace((s) => s.context);
+  const snapshot = useLinks((s) => s.snapshot);
+  const sessionStartedAt = useLinks((s) => s.sessionStartedAt);
+  const lastRequestStatus = useLinks((s) => s.lastRequestStatus);
   const [version, setVersion] = useState<string | null>(null);
 
   useEffect(() => {
-    appVersion().then(setVersion, () => setVersion(null));
+    ipc.appVersion().then(setVersion, () => setVersion(null));
   }, []);
+
+  // Record which panel is open, for the session timeline.
+  useEffect(() => {
+    if (view !== "settings" && context) void ipc.busPublish("depot.panel_opened", { tool: view }).catch(() => undefined);
+  }, [view, context]);
 
   // Development aid: open the app with #gallery to see every shared component.
   if (import.meta.env.DEV && window.location.hash === "#gallery") return <Gallery />;
+
+  const Panel = view === "settings" ? null : panels[view];
 
   return (
     <div className="flex h-full flex-col">
@@ -25,43 +72,22 @@ export default function App() {
         <Sidebar
           items={tools}
           activeId={view}
-          onSelect={(id) => setView(id as ToolId)}
-          onOpenSettings={() => setView("settings")}
+          onSelect={(id) => go(id as ToolId)}
+          onOpenSettings={() => go("settings")}
           settingsActive={view === "settings"}
         />
-        <main className="min-w-0 flex-1 overflow-auto p-5">
-          {view === "settings" ? <SettingsPlaceholder version={version} /> : <PanelPlaceholder id={view} />}
+        <main className="flex min-w-0 flex-1 flex-col overflow-auto p-5">
+          {/* Keyed by workspace: switching workspace starts every panel fresh. */}
+          {Panel ? <Panel key={context?.name ?? ""} /> : <SettingsPanel key={context?.name ?? ""} version={version} />}
         </main>
       </div>
-      {/* Workspace, session, Pulse and Relay data arrive with the stores in the next build. */}
-      <StatusBar workspaceName={null} sessionStartedAt={null} processCount={null} lastRequestStatus={null} />
+      <StatusBar
+        workspaceName={context?.name ?? null}
+        onWorkspaceClick={() => go("switchyard")}
+        sessionStartedAt={sessionStartedAt}
+        processCount={snapshot ? snapshot.processes.length : null}
+        lastRequestStatus={lastRequestStatus}
+      />
     </div>
-  );
-}
-
-function PanelPlaceholder({ id }: { id: ToolId }) {
-  const tool = toolById(id);
-  return (
-    <EmptyState
-      icon={tool.icon}
-      title={`${tool.name} isn't in Depot yet`}
-      description={
-        <>
-          {tool.description}. Until this panel ships, use the{" "}
-          <ExternalLink href={tool.repo}>standalone {tool.name} app</ExternalLink>
-          .
-        </>
-      }
-    />
-  );
-}
-
-function SettingsPlaceholder({ version }: { version: string | null }) {
-  return (
-    <EmptyState
-      icon={Settings}
-      title="No settings yet"
-      description={version ? `Depot ${version}` : "Depot (running outside the desktop shell)"}
-    />
   );
 }

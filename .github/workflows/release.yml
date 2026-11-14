@@ -2,6 +2,8 @@
 # v* tag is pushed, and attaches them to a DRAFT GitHub Release. A maintainer
 # reviews the draft and publishes it by hand.
 #
+# Each bundle includes depot-core, the sidecar that runs the six tools'
+# pinned Python cores, built here with PyInstaller for that platform.
 # Bundles are unsigned. Code signing can be added later through
 # tauri-action's documented environment variables once certificates exist.
 
@@ -15,27 +17,7 @@ permissions:
   contents: write
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Linux system libraries for Tauri
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-
   build:
-    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -43,12 +25,16 @@ jobs:
           - os: windows-latest
             args: ''
           - os: macos-latest
-            args: '--target aarch64-apple-darwin'
+            args: ''
           - os: ubuntu-22.04
             args: ''
     runs-on: ${{ matrix.os }}
+    env:
+      DEPOT_PYTHON: python
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Install Linux system libraries for Tauri
         if: runner.os == 'Linux'
@@ -57,8 +43,6 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -69,7 +53,24 @@ jobs:
           node-version: '22'
           cache: npm
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
       - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: python -m unittest discover -s core/tests
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # The sidecar is built for the runner's own architecture, so each
+      # bundle is native to its runner (macos-latest is Apple Silicon).
+      - name: Build and smoke-test the depot-core sidecar
+        shell: bash
+        run: |
+          python -m pip install pyinstaller
+          python scripts/build-core.py
+          python scripts/smoke-core.py src-tauri/binaries/depot-core-*
 
       - uses: tauri-apps/tauri-action@v1
         env:
@@ -80,4 +81,4 @@ jobs:
           releaseBody: See CHANGELOG.md for what changed. Builds are not code-signed yet.
           releaseDraft: true
           prerelease: true
-          args: ${{ matrix.args }}
+          args: --config src-tauri/tauri.bundle.conf.json ${{ matrix.args }}

@@ -6,8 +6,10 @@ the same manifest a third-party plugin would use. Loading third-party plugins
 is not supported in v1; the manifest format is published now so the built-in
 tools are held to it.
 
-**Status.** v1 of the protocol. The manifests and the event catalogue below
-are the contract the Rust bus validates against (planned for the next build).
+**Status.** v1 of the protocol, in use. The manifests live in
+`src/protocol/plugins/<id>.json` and the event list in `src/protocol/events.json`;
+the Rust bus validates every event against both, and tests keep this document,
+the JSON files and the TypeScript types in step.
 
 ## `depot.plugin.json`
 
@@ -81,6 +83,11 @@ argument and is never passed through a shell.
 
 ## Event catalogue
 
+Each event type also has an **origin** in `events.json` — `core` (depot-core),
+`backend` (Rust) or `frontend` (a panel) — and the bus refuses it from anyone
+else. Only two are `frontend`: `needle.file_found` and `depot.panel_opened`,
+both user actions.
+
 Every event travels in the envelope described in
 [ARCHITECTURE.md](ARCHITECTURE.md#envelope): `id`, `type`, `source`,
 `workspace`, `ts`, `payload`. The tables below define `payload`.
@@ -111,8 +118,8 @@ Conventions:
 |---|---|---|---|
 | `switchyard.session_started` | `{ session_id: string, name: string, services: string[] }` | yes | — |
 | `switchyard.session_stopped` | `{ session_id: string, reason: "user" \| "failure" }` | yes | — |
-| `switchyard.service_started` | `{ service_id: string, name: string, pid: number, ports: number[] }` | yes | Pulse |
-| `switchyard.service_ready` | `{ service_id: string, name: string, pid: number, ports: number[], startup_ms: number }` | yes | — |
+| `switchyard.service_started` | `{ service_id: string, name: string, pid: number?, ports: number[] }` | yes | — |
+| `switchyard.service_ready` | `{ service_id: string, name: string, pid: number?, ports: number[], startup_ms: number }` | yes | — |
 | `switchyard.service_unhealthy` | `{ service_id: string, name: string, pid: number?, ports: number[], reason: "exited" \| "readiness_timeout" \| "port_lost", exit_code: number? }` | yes | **Pulse** |
 | `switchyard.service_stopped` | `{ service_id: string, name: string, exit_code: number? }` | yes | — |
 
@@ -132,8 +139,8 @@ Conventions:
 | `relay.request_sent` | `{ request_id: string, method: string, url: string }` — URL without query values | yes | — |
 | `relay.response_received` | `{ request_id: string, status: number, elapsed_ms: number, size_bytes: number }` | yes | status bar |
 | `relay.request_failed` | `{ request_id: string, error: string }` | yes | — |
-| `relay.mock_started` | `{ port: number, routes: string[] }` | yes | Pulse |
-| `relay.mock_stopped` | `{ port: number }` | yes | — |
+| `relay.mock_started` | `{ port: number, routes: string[] }` — reserved: Depot's Relay panel has no mock server yet | yes | — |
+| `relay.mock_stopped` | `{ port: number }` — reserved, as above | yes | — |
 
 ### Pulse
 
@@ -142,7 +149,7 @@ Conventions:
 | `pulse.snapshot` | `{ process_count: number, listening: Array<{ pid: number, port: number }> }` | **no** | status bar |
 | `pulse.port_listening` | `{ pid: number, process_name: string, address: string, port: number, protocol: "tcp" \| "udp" }` — a port that was not listening in the previous snapshot | yes | **Relay** |
 | `pulse.port_closed` | `{ pid: number, port: number }` | yes | — |
-| `pulse.process_exited` | `{ pid: number, name: string }` — only for processes Pulse is focused on | yes | — |
+| `pulse.process_exited` | `{ pid: number, name: string }` — reserved: not published yet | yes | — |
 
 ### BLACKBOX
 
@@ -166,7 +173,7 @@ change `overall_risk`, so the risk badge means the same thing whether or not
 | `forge.step_started` | `{ run_id: string, step_index: number, step_id: string, type: string, label: string }` | yes | — |
 | `forge.step_succeeded` | `{ run_id: string, step_index: number, step_id: string, duration_ms: number }` | yes | — |
 | `forge.step_failed` | `{ run_id: string, step_index: number, step_id: string, label: string, error: string, pid: number?, exit_code: number? }` | yes | **Pulse** |
-| `forge.run_finished` | `{ run_id: string, outcome: "completed" \| "failed" \| "stopped", duration_ms: number }` | yes | — |
+| `forge.run_finished` | `{ run_id: string, outcome: "completed" \| "failed" \| "stopped", failed_steps: number, duration_ms: number }` — a run that continued past errors is `completed` with `failed_steps` > 0 | yes | — |
 
 `pid` is set only for `command` steps.
 
@@ -190,7 +197,7 @@ present, so no tool links to a panel that cannot answer.
 | `switchyard` | `Waypoints` | `#58a6ff` | `switchyard.*` (6) | `blackbox.scan_complete` |
 | `needle` | `Search` | `#3fb950` | `needle.*` (4) | — |
 | `relay` | `Send` | `#a371f7` | `relay.*` (5) | `pulse.port_listening` |
-| `pulse` | `Activity` | `#f07b2b` | `pulse.*` (4) | `forge.step_failed`, `switchyard.service_unhealthy`, `switchyard.service_started`, `relay.mock_started` |
+| `pulse` | `Activity` | `#f07b2b` | `pulse.*` (4) | `forge.step_failed`, `switchyard.service_unhealthy` |
 | `blackbox` | `ScanSearch` | `#f85149` | `blackbox.*` (4) | — |
 | `forge` | `Workflow` | `#d29922` | `forge.*` (5) | `needle.file_found` |
 

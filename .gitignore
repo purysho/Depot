@@ -8,3 +8,8 @@ Thumbs.db
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# depot-core sidecar build output (scripts/build-core.py)
+core/build/
+src-tauri/binaries/
+__pycache__/

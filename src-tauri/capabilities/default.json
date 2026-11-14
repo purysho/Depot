@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Permissions for Depot's main window. Each new command or plugin is added here deliberately; nothing is granted by default.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:allow-open-url", "opener:allow-default-urls"]
+  "permissions": ["core:default", "opener:allow-open-url", "opener:allow-default-urls", "dialog:allow-open"]
 }

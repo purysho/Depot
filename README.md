@@ -13,7 +13,7 @@
   </p>
 </div>
 
-![Depot's window: the tool sidebar on the left, the Switchyard panel placeholder in the centre, and the status bar along the bottom](docs/screenshots/depot-shell.png)
+![Depot's workspace home: a running Switchyard session, a project card with its BLACKBOX risk score, and the session timeline recording events from Switchyard, Pulse, Relay and BLACKBOX](docs/screenshots/depot-home.png)
 
 Depot brings six standalone tools into one window with shared workspace context:
 
@@ -33,9 +33,11 @@ that happened while you worked.
 
 ## Download
 
-There is no release yet. Depot is in alpha: the window, sidebar, status bar
-and design system are built, and the tool panels are not. Until they are,
-use the standalone apps linked in the table above.
+There is no release yet. Depot is in alpha: all six panels, the shared
+workspace, the event bus with its five cross-tool links, and the session
+timeline work, and are tested on Linux. Windows and macOS builds run in CI
+but have not been tried by hand. Until the first release, run it from source
+or use the standalone apps linked above.
 
 | Platform | File |
 |---|---|
@@ -45,15 +47,22 @@ use the standalone apps linked in the table above.
 
 ## Run from source
 
-Requirements: Node.js 22.12 or newer, Rust (stable), and the
-[Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/) for
-your platform (WebView2 on Windows, Xcode Command Line Tools on macOS,
+Requirements: Node.js 22.12 or newer, Rust (stable), Python 3.10 or newer,
+and the [Tauri system prerequisites](https://v2.tauri.app/start/prerequisites/)
+for your platform (WebView2 on Windows, Xcode Command Line Tools on macOS,
 WebKitGTK on Linux).
 
+The six tools' own code is included as git submodules under `vendor/`:
+
 ```bash
+git clone --recurse-submodules https://github.com/purysho/Depot.git
+cd Depot
 npm install
 npm run tauri dev
 ```
+
+In development Depot runs the tools through `python3` (`python` on Windows);
+set `DEPOT_PYTHON` to use another interpreter.
 
 Checks, as run in CI:
 
@@ -61,14 +70,16 @@ Checks, as run in CI:
 npm run typecheck
 npm run lint
 npm test
+python -m unittest discover -s core/tests
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 To see every shared UI component, run `npm run dev` and open
 `http://localhost:1420/#gallery`.
 
-How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-[docs/PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md).
+How it fits together: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/PLUGIN_PROTOCOL.md](docs/PLUGIN_PROTOCOL.md) and
+[core/README.md](core/README.md).
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md).

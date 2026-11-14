@@ -28,19 +28,35 @@ All state is stored under `~/.depot/` as plain JSON and JSON Lines files.
 
 The webview is locked down: a Content Security Policy allows only Depot's own
 scripts, and `src-tauri/capabilities/default.json` grants the window only the
-core Tauri permissions and opening web links in the system browser. Each tool
-that needs more (for example spawning a sidecar program) is granted the
-narrowest scope that works, listed in that file.
+core Tauri permissions, opening http(s) and mailto links in the system
+browser, and the open-folder dialog.
 
-Planned features that change this picture, and how:
+What runs, and with what reach:
 
-- **Relay's mock server** will listen only after you start it, on `127.0.0.1`.
-- **BLACKBOX's optional `ocr` review** runs the separately installed
-  [Open Code Review](https://github.com/alibaba/open-code-review) CLI, which
-  sends the diff under review to the LLM provider *you* configured in `ocr`.
-  It runs only when you press its button, never as part of a normal scan.
+- **depot-core**, a sidecar bundled with Depot, runs the six tools' own
+  Python code. Depot starts it with a fixed command and talks to it over
+  stdin/stdout; it opens no ports.
+- **Relay** sends requests only to the URL you enter. As in standalone Relay,
+  any URL scheme Python's `urllib` accepts works, including `file://`, which
+  reads a local file you can already read.
+- **Switchyard** sessions started from Depot run the service commands
+  defined in Switchyard, with your permissions, and stop when Depot quits.
 - **Forge** runs the commands you put in a workflow, with your permissions.
   That is its purpose, not a vulnerability.
+- **BLACKBOX's optional AI review** runs the separately installed
+  [Open Code Review](https://github.com/alibaba/open-code-review) CLI, which
+  sends the diff under review to the LLM provider *you* configured in `ocr`.
+  It runs only when you press its button, never as part of a scan, and is
+  started from Rust with fixed arguments; git refs that could be read as
+  options are refused.
+- **Pulse** reads process and connection lists through the operating
+  system's own tools. Its snapshots include full command lines, which can
+  contain secrets passed as arguments; they stay in memory and are not
+  written to the timeline.
+- **Events** recorded in the timeline never include header values, request
+  query strings, or the text of detected secrets.
+- The webview cannot start programs or publish tool results: only Rust
+  starts processes, and the bus accepts just two user-action events from it.
 
 Vulnerabilities we care about:
 
