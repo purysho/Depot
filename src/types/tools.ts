@@ -66,6 +66,8 @@ export interface NeedleIndexInfo {
   total_size: number;
   roots: string[];
   updated_at: number | string | null;
+  /** File count per extension, most common first. */
+  by_extension: Record<string, number>;
 }
 
 // ── Relay
@@ -89,6 +91,20 @@ export interface RelayResponse {
 export type RelaySendResult =
   | { request_id: string; ok: true; response: RelayResponse }
   | { request_id: string; ok: false; error: string };
+export interface RelaySavedItem {
+  name: string;
+  request: RelayRequest;
+}
+export interface MockRoute {
+  path: string;
+  status: number;
+  body: string;
+}
+export interface MockServerInfo {
+  port: number;
+  url: string;
+  routes: MockRoute[];
+}
 export interface RelayHistoryItem {
   request: RelayRequest;
   status: number | null;
@@ -190,4 +206,24 @@ export interface ForgeWorkflow {
   name: string;
   description: string;
   steps: ForgeStep[];
+}
+
+/** A third-party plugin found in ~/.depot/plugins (src-tauri/src/third_party.rs). */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  label: string;
+  icon: string;
+  color: string;
+  folder: string;
+  program: string;
+  args: string[];
+  workspace_scoped: boolean;
+  enabled: boolean;
+  /** Enabled once, but its program or arguments changed since. */
+  needs_approval: boolean;
+  /** Why the manifest cannot be used. */
+  error: string | null;
 }

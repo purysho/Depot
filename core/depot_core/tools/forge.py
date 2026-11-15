@@ -1,6 +1,7 @@
 """Forge: the workspace's workflows, and running them with live progress."""
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -83,6 +84,35 @@ def _store(params: dict[str, Any]) -> ForgeStore:
 
 def list_workflows(params: dict[str, Any], _ctx: Context) -> list[dict[str, Any]]:
     return [w.to_dict() for w in _store(params).load()]
+
+
+def import_workflow(params: dict[str, Any], _ctx: Context) -> list[dict[str, Any]]:
+    """Add a workflow from a .forge.json file (Forge's own export format) to
+    the workspace's workflows. Importing never runs anything."""
+    path = p.path(params, "path")
+    assert path is not None
+    store = _store(params)
+    try:
+        workflow = ForgeStore.import_workflow(path)
+    except FileNotFoundError as exc:
+        raise not_found(f"File not found: {path}") from exc
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise invalid(f"Not a Forge workflow: {exc}") from exc
+    workflows = store.load() + [workflow]
+    store.save(workflows)
+    return [w.to_dict() for w in workflows]
+
+
+def export_workflow(params: dict[str, Any], _ctx: Context) -> dict[str, Any]:
+    """Write one workflow to a .forge.json file that standalone Forge can import."""
+    path = p.path(params, "path")
+    index = p.integer(params, "index", 0, low=0, high=10_000)
+    assert path is not None
+    workflows = _store(params).load()
+    if index >= len(workflows):
+        raise not_found("That workflow no longer exists")
+    ForgeStore.export_workflow(workflows[index], path)
+    return {"path": str(path), "name": workflows[index].name}
 
 
 def save_workflows(params: dict[str, Any], _ctx: Context) -> dict[str, Any]:
@@ -214,3 +244,5 @@ def register(server: Server) -> None:
     server.register("forge.stop", stop)
     server.register("forge.active", active)
     server.register("forge.validate", validate)
+    server.register("forge.import", import_workflow)
+    server.register("forge.export", export_workflow)

@@ -13,3 +13,4 @@ src-tauri/gen/schemas/
 core/build/
 src-tauri/binaries/
 __pycache__/
+src-tauri/tauri.release.conf.json

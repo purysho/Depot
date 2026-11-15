@@ -185,7 +185,7 @@ knowing anything about Relay.
 
 ### One catalogue
 
-`src/protocol/events.json` lists every event type (33), whether the timeline
+`src/protocol/events.json` lists every event type (34), whether the timeline
 records it, and **who may publish it**: `core` (depot-core), `backend` (Rust)
 or `frontend` (a panel — user actions only: `needle.file_found`,
 `depot.panel_opened`). Rust reads it with `include_str!`; TypeScript checks
@@ -339,8 +339,8 @@ Windows, with the submodules checked out:
 
 `.github/workflows/release.yml`, on a `v*` tag: the same tests, then
 platform-native bundles with the sidecar via `tauri-apps/tauri-action`,
-attached to a **draft** release. Bundles are unsigned until signing secrets
-exist.
+attached to a **draft** release. Bundles are signed on macOS and Windows when
+the signing secrets exist, and unsigned otherwise (docs/RELEASING.md).
 
 Local development:
 

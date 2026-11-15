@@ -13,7 +13,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   git submodules under `vendor/`. Packaged with PyInstaller and bundled with
   Depot; smoke-tested in CI on every platform.
 - The workspace context (`~/.depot/workspaces/<name>/context.json`), the
-  event bus with one shared catalogue of 33 event types, and the session
+  event bus with one shared catalogue of 34 event types, and the session
   timeline (JSON Lines per session).
 - Five cross-tool links: Pulse → Relay (**Open in Relay →** on listening
   ports), Needle → Forge (**Add to workflow →**), BLACKBOX → Switchyard (risk
@@ -22,6 +22,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional AI review in BLACKBOX through Open Code Review (`ocr`) when it is
   installed; its findings sit beside BLACKBOX's own and do not change the risk
   score.
+- Relay: saved requests, query parameters, and a mock server (routes with a
+  status and body, started on any free port, logged live, stopped on quit).
+- Forge: import and export `.forge.json` files through the system dialog,
+  move steps up and down, and edit a step in place.
+- Needle: filter results by file type, open a result in its default app or
+  reveal it in the file manager. Programs and scripts are revealed, never
+  opened, because opening one runs it.
+- Third-party plugins in handoff mode: put a `depot.plugin.json` in
+  `~/.depot/plugins/<name>/` and enable it in Settings. Depot shows the exact
+  command, runs it only after you approve it, asks again if it changes, and
+  records each launch on the timeline (docs/PLUGIN_PROTOCOL.md).
+- Code signing for releases, switched on by repository secrets: Developer ID
+  signing and notarization on macOS (sidecar included), Azure Trusted Signing
+  on Windows. Not yet run with real certificates (docs/RELEASING.md).
 
 ### Fixed (from code review of 273f741)
 - A Forge delete step with a blank path deleted the contents of depot-core's
@@ -49,13 +63,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the native binary and stops the whole process tree.
 
 ### Not yet
-- Relay's mock server, saved requests and request parameters; Needle's
-  extension filter; Forge's workflow import/export, step reordering and
-  editing (remove and re-add for now). Each exists in the standalone app.
-- Opening or revealing a Needle result in the system file manager (copy path
-  for now).
-- Third-party plugins: the manifest format is published, loading is not built.
-- Code signing.
+- Third-party plugins with their own panel code or bus events (`native` and
+  `sidecar` modes stay reserved for the built-in tools).
+- Signed Linux bundles.
 
 ### Earlier in this release
 - Tauri v2 desktop shell with React 18, TypeScript, Tailwind CSS v4 and Vite.

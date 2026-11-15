@@ -61,6 +61,19 @@ What runs, and with what reach:
 - **Forge** refuses steps with blank required fields before running anything,
   and will not delete a drive root, your home folder or the folder it runs in.
   Commands without a working folder run in the workspace folder.
+- **Needle** opens a result with its default app only if it is inside the
+  workspace's indexed folders (checked after resolving links) and is not a
+  program or script; those are revealed in the file manager instead.
+- **Third-party plugins** (`~/.depot/plugins/`) run nothing until you enable
+  them in Settings, which shows the exact program and arguments. That
+  approval is stored; if the manifest's program or arguments change, the
+  plugin stops running until you approve it again. Rust starts the program
+  with an argument list and no shell, and the only substitutions are the
+  workspace folder and name. Plugins cannot load code into Depot or use the
+  event bus. A plugin you enable runs with your permissions, like any program
+  you install: only enable ones you trust.
+- **Relay's mock server** listens on 127.0.0.1 only, on a port you choose or
+  a free one, until you stop it or quit Depot.
 - The webview cannot start programs or publish tool results: only Rust
   starts processes, and the bus accepts just two user-action events from it.
 

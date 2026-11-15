@@ -5,11 +5,17 @@ Tauri's `bundle.externalBin` expects. Release builds then run:
 
     npm run tauri build -- --config src-tauri/tauri.bundle.conf.json
 
+On macOS, set DEPOT_CODESIGN_IDENTITY to a Developer ID Application
+identity in the keychain to sign the sidecar and every file PyInstaller packs
+into it, with the hardened runtime and src-tauri/entitlements.plist, as
+notarization requires. Without it the sidecar is unsigned (local builds).
+
 Requires: Python 3.10+, `pip install pyinstaller`, Rust (for the target
 triple), and the tool submodules checked out (`git submodule update --init`).
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -22,6 +28,14 @@ TOOLS = ("needle", "relay", "pulse", "blackbox", "forge", "switchyard")
 def target_triple() -> str:
     out = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True).stdout
     return next(line.split(": ", 1)[1] for line in out.splitlines() if line.startswith("host: "))
+
+
+def macos_signing() -> list[str]:
+    identity = os.environ.get("DEPOT_CODESIGN_IDENTITY", "").strip()
+    if sys.platform != "darwin" or not identity:
+        return []
+    entitlements = ROOT / "src-tauri" / "entitlements.plist"
+    return ["--codesign-identity", identity, "--osx-entitlements-file", str(entitlements)]
 
 
 def main() -> None:
@@ -39,6 +53,7 @@ def main() -> None:
         "--exclude-module", "tkinter",
         *[arg for p in paths for arg in ("--paths", p)],
         "--collect-submodules", "depot_core",
+        *macos_signing(),
         str(ROOT / "core" / "depot_core" / "__main__.py"),
     ]
     subprocess.run(cmd, check=True, cwd=ROOT)

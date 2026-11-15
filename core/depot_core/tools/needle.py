@@ -86,7 +86,7 @@ def index_info(params: dict[str, Any], _ctx: Context) -> dict[str, Any] | None:
     if not index_path.exists():
         return None
     info = _load(index_path).stats()
-    return {k: info[k] for k in ("documents", "terms", "total_size", "roots", "updated_at")}
+    return {k: info[k] for k in ("documents", "terms", "total_size", "roots", "updated_at", "by_extension")}
 
 
 def register(server: Server) -> None:

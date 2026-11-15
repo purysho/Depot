@@ -186,9 +186,9 @@ def build_server(out: IO[str]) -> Server:
 def stop_everything(server: Server) -> None:
     """Stop running workflows and sessions, all at once, and wait for them:
     nothing Depot started outlives it."""
-    from depot_core.tools import forge, switchyard
+    from depot_core.tools import forge, relay, switchyard
 
-    workers = [threading.Thread(target=f, args=(server,)) for f in (forge.stop_all, switchyard.stop_all)]
+    workers = [threading.Thread(target=f, args=(server,)) for f in (forge.stop_all, switchyard.stop_all, relay.stop_all)]
     for w in workers:
         w.start()
     for w in workers:

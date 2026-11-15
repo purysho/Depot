@@ -13,6 +13,7 @@ export interface EventPayloads {
   "depot.session_ended": { session: string; reason: "closed" | "quit" | "workspace_switched" };
   "depot.workspace_opened": { name: string; root: string };
   "depot.panel_opened": { tool: ToolId };
+  "depot.plugin_launched": { plugin: string; name: string; pid: number };
 
   "switchyard.session_started": { session_id: string; name: string; services: string[] };
   "switchyard.session_stopped": { session_id: string; reason: "user" | "failure" };
@@ -96,6 +97,7 @@ export const eventOrigins = {
   "depot.session_ended": "backend",
   "depot.workspace_opened": "backend",
   "depot.panel_opened": "frontend",
+  "depot.plugin_launched": "backend",
   "switchyard.session_started": "core",
   "switchyard.session_stopped": "core",
   "switchyard.service_started": "core",

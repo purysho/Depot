@@ -1,7 +1,9 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::error::{DepotError, Result};
 use crate::state::AppState;
@@ -53,4 +55,39 @@ pub async fn forge_active(state: State<'_, AppState>) -> Result<Value> {
 #[tauri::command]
 pub async fn forge_stop(state: State<'_, AppState>, run_id: String) -> Result<Value> {
     state.core("forge.stop", json!({"run_id": run_id})).await
+}
+
+/// Pick a file with a native dialog opened here in Rust, so the path is the
+/// person's choice and never a string the webview supplied.
+async fn choose(app: &AppHandle, save_as: Option<String>) -> Result<Option<PathBuf>> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog = app.dialog().file().add_filter("Forge workflow", &["json"]);
+        let picked = match save_as {
+            Some(name) => dialog.set_title("Export workflow").set_file_name(name).blocking_save_file(),
+            None => dialog.set_title("Import workflow").blocking_pick_file(),
+        };
+        picked.and_then(|p| p.as_path().map(Path::to_path_buf))
+    })
+    .await
+    .map_err(|e| DepotError::core(e.to_string()))
+}
+
+/// Import a `.forge.json` file (standalone Forge's export format). Returns the
+/// updated workflow list, or null if the person cancelled.
+#[tauri::command]
+pub async fn forge_import(app: AppHandle, state: State<'_, AppState>) -> Result<Value> {
+    let Some(path) = choose(&app, None).await? else { return Ok(Value::Null) };
+    state.core("forge.import", json!({"store_dir": state.tool_dir("forge")?, "path": path})).await
+}
+
+/// Export one workflow to a `.forge.json` file standalone Forge can import.
+/// Returns null if the person cancelled.
+#[tauri::command]
+pub async fn forge_export(app: AppHandle, state: State<'_, AppState>, index: usize, name: String) -> Result<Value> {
+    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+    let Some(path) = choose(&app, Some(format!("{}.forge.json", safe.trim_matches('-')))).await? else {
+        return Ok(Value::Null);
+    };
+    state.core("forge.export", json!({"store_dir": state.tool_dir("forge")?, "index": index, "path": path})).await
 }

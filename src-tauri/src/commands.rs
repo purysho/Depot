@@ -98,3 +98,47 @@ pub fn timeline_read(state: State<'_, AppState>, session: String, offset: usize,
     }
     timeline::read(&sessions_dir(&state)?, &session, offset, limit)
 }
+
+// ── Third-party plugins (third_party.rs) ─────────────────────────────────
+
+#[tauri::command]
+pub fn plugins_list(state: State<'_, AppState>) -> Vec<crate::third_party::PluginInfo> {
+    let settings = workspace::load_settings(&state.home);
+    crate::third_party::discover(&state.home, &settings.approved_plugins, env!("CARGO_PKG_VERSION"))
+}
+
+/// Enable (approving the program and arguments as they are now) or disable.
+#[tauri::command]
+pub fn plugins_set_enabled(state: State<'_, AppState>, id: String, enabled: bool) -> Result<Vec<crate::third_party::PluginInfo>> {
+    let mut settings = workspace::load_settings(&state.home);
+    let found = crate::third_party::discover(&state.home, &settings.approved_plugins, env!("CARGO_PKG_VERSION"));
+    let plugin = found.iter().find(|p| p.id == id).ok_or_else(|| DepotError::not_found(format!("No plugin {id}")))?;
+    if enabled {
+        if let Some(error) = &plugin.error {
+            return Err(DepotError::invalid(format!("{} cannot be enabled: {error}", plugin.name)));
+        }
+        settings
+            .approved_plugins
+            .insert(id, crate::third_party::Approval { program: plugin.program.clone(), args: plugin.args.clone() });
+    } else {
+        settings.approved_plugins.remove(&id);
+    }
+    workspace::save_settings(&state.home, &settings)?;
+    Ok(crate::third_party::discover(&state.home, &settings.approved_plugins, env!("CARGO_PKG_VERSION")))
+}
+
+/// Start an enabled plugin's program and record it in the timeline.
+#[tauri::command]
+pub fn plugins_launch(state: State<'_, AppState>, id: String) -> Result<u32> {
+    let settings = workspace::load_settings(&state.home);
+    let found = crate::third_party::discover(&state.home, &settings.approved_plugins, env!("CARGO_PKG_VERSION"));
+    let plugin = found.into_iter().find(|p| p.id == id).ok_or_else(|| DepotError::not_found(format!("No plugin {id}")))?;
+    let workspace = state.workspace.lock().expect("workspace lock").clone();
+    let pid = crate::third_party::launch(&plugin, workspace.as_ref())?;
+    state.bus.publish(
+        Origin::Backend,
+        "depot.plugin_launched",
+        serde_json::json!({"plugin": plugin.id, "name": plugin.name, "pid": pid}),
+    )?;
+    Ok(pid)
+}

@@ -2,9 +2,8 @@
 
 A Depot plugin is a tool with a panel in the sidebar. The six built-in tools —
 Switchyard, Needle, Relay, Pulse, BLACKBOX and Forge — are plugins described by
-the same manifest a third-party plugin would use. Loading third-party plugins
-is not supported in v1; the manifest format is published now so the built-in
-tools are held to it.
+the same manifest a third-party plugin uses. Third-party plugins load in
+**handoff** mode only: see [Third-party plugins](#third-party-plugins).
 
 **Status.** v1 of the protocol, in use. The manifests live in
 `src/protocol/plugins/<id>.json` and the event list in `src/protocol/events.json`;
@@ -46,13 +45,13 @@ the JSON files and the TypeScript types in step.
 | `description` | string | yes | One sentence, shown in Settings. |
 | `panel.icon` | string | yes | A [Lucide](https://lucide.dev/icons/) icon name in PascalCase. Must exist in the `lucide-react` version Depot ships (1.73.0). |
 | `panel.label` | string | yes | Tooltip and accessible name of the sidebar button. |
-| `panel.color` | hex colour | yes | Identity colour; must be one of the `colors.tools` tokens. Used only as an accent, never as the only cue. |
-| `panel.component` | string | yes | Path under `src/` of the React component, without extension. |
+| `panel.color` | hex colour | yes | Identity colour, `#rrggbb`. Built-in tools use their `colors.tools` token. Used only as an accent, never as the only cue. |
+| `panel.component` | string | native only | Path under `src/` of the React component, without extension. |
 | `workspace_scoped` | boolean | yes | `true`: the panel reads its settings from `context.json → tools.<id>` and is reset when the workspace changes. |
-| `events.publishes` | string[] | yes | Every event type the plugin may publish. Each must start with `<id>.`. The bus rejects anything else. |
-| `events.subscribes` | string[] | yes | Event types the panel reacts to. Informational for the bus; used to draw the integration map in Settings. |
+| `events.publishes` | string[] | yes (may be empty) | Every event type the plugin may publish. Each must start with `<id>.`. The bus rejects anything else. |
+| `events.subscribes` | string[] | yes (may be empty) | Event types the panel reacts to. Informational for the bus; used to draw the integration map in Settings. |
 | `embed` | object | yes | How the plugin runs. See [Embed modes](#embed-modes). |
-| `handoff` | object | no | How to open the standalone app on the same context. See below. |
+| `handoff` | object | handoff mode | What to start: `program` and `args` for a third-party plugin; built-in tools name their standalone `app`. See below. |
 | `min_depot` | semver string | yes | Lowest Depot version the manifest works with. |
 
 Unknown fields are rejected, so a typo does not silently do nothing.
@@ -63,7 +62,7 @@ Unknown fields are rejected, so a typo does not silently do nothing.
 |---|---|---|---|
 | `native` | A React panel, backed by a Rust bridge in `src-tauri/src/plugins/<id>.rs`. The bridge may itself call a sidecar (ADR-001 in ARCHITECTURE.md). | `bridge` | All six built-in tools |
 | `sidecar` | An external program spawned by Rust, speaking JSON on stdout. Must be declared in the Tauri shell-plugin scope with its exact arguments. | `program`, `args`, `required` (`false` = optional; the panel works without it) | BLACKBOX's optional `ocr` review |
-| `handoff` | No panel of its own; the sidebar button launches the standalone app. | — | Fallback for a tool whose panel is not built yet |
+| `handoff` | A simple Depot panel that shows what will run and a button that starts it. | `handoff.program`, `handoff.args` | Third-party plugins |
 
 ### Handoff
 
@@ -80,6 +79,57 @@ argument and is never passed through a shell.
 | BLACKBOX | `--repo PATH` |
 | Forge | none |
 | Switchyard | none |
+
+## Third-party plugins
+
+Put each plugin in its own folder under `~/.depot/plugins/`, with a
+`depot.plugin.json`. Depot lists every folder it finds in **Settings →
+Plugins**, including any whose manifest is wrong and why.
+
+```json
+{
+  "id": "notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "description": "Open my notes app on this project.",
+  "panel": { "icon": "Notebook", "label": "Notes", "color": "#6e7681" },
+  "workspace_scoped": true,
+  "events": { "publishes": [], "subscribes": [] },
+  "embed": { "mode": "handoff" },
+  "handoff": { "program": "notes-app", "args": ["--dir", "{workspace.root}"] },
+  "min_depot": "0.1.0"
+}
+```
+
+Rules (checked by `src-tauri/src/third_party.rs`):
+
+- **Nothing runs until you enable it.** Enabling records the exact program
+  and arguments shown. If the manifest later changes either, the plugin is
+  marked *Changed — review* and does not run until you enable it again.
+- `embed.mode` must be `handoff`. `native` and `sidecar` would run the
+  plugin's code inside Depot with all of Depot's permissions, so they are
+  reserved for the built-in tools.
+- `handoff.program` is an absolute path, a path relative to the plugin's
+  folder (`./bin/notes`), or a program name looked up on `PATH`.
+- `handoff.args` may use `{workspace.root}` and `{workspace.name}`. Each
+  argument stays one argument after expansion and nothing goes through a
+  shell, so `;`, `$(…)` and quotes arrive as plain text. Any other `{…}`
+  placeholder is refused.
+- The program starts in the workspace folder (or the plugin's folder with no
+  workspace open), with no input and its output discarded. It is not stopped
+  when Depot quits, like any app you open.
+- `events.publishes` and `events.subscribes` must be empty: third-party
+  plugins cannot use the bus yet. Depot records each launch itself as
+  `depot.plugin_launched`.
+- `id` must not be a built-in tool's (`switchyard`, `needle`, `relay`,
+  `pulse`, `blackbox`, `forge`, `depot`) or another plugin's.
+- `panel.icon` must be one of: `BookOpen`, `Bot`, `Box`, `Bug`, `ChartLine`,
+  `Cloud`, `Container`, `Cpu`, `Database`, `FileText`, `Gauge`, `GitBranch`,
+  `Globe`, `Layers`, `Mail`, `Network`, `Notebook`, `Package`, `Puzzle`,
+  `Rocket`, `Server`, `Shield`, `Terminal`, `Wrench`. Others show `Puzzle`.
+- Unknown fields are refused, and `min_depot` must not be newer than Depot.
+
+Enabled plugins appear in the sidebar below the built-in tools.
 
 ## Event catalogue
 
@@ -114,6 +164,7 @@ Conventions:
 | `depot.session_ended` | `{ session: string, reason: "closed" \| "quit" \| "workspace_switched" }` | yes |
 | `depot.workspace_opened` | `{ name: string, root: string }` | yes |
 | `depot.panel_opened` | `{ tool: ToolId }` | yes |
+| `depot.plugin_launched` | `{ plugin: string, name: string, pid: number }` — a third-party plugin's program was started | yes |
 
 ### Switchyard
 

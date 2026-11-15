@@ -11,6 +11,7 @@ import switchyard from "../protocol/plugins/switchyard.json";
 import type { EventType } from "../types/events";
 import type { PulseSnapshot } from "../types/tools";
 import { subscribe } from "./bus";
+import type { PluginView } from "./plugins";
 
 // The cross-tool layer. Subscriptions are made once at startup, not inside
 // panels, so an event lands even when its target panel is not on screen
@@ -30,10 +31,13 @@ export type Intent =
   | { tool: "forge"; addPath: string }
   | { tool: "pulse"; pid: number };
 
+/** A built-in tool, Settings, or a third-party plugin's panel. */
+export type View = ToolId | "settings" | PluginView;
+
 interface NavStore {
-  view: ToolId | "settings";
+  view: View;
   intent: Intent | null;
-  go: (view: ToolId | "settings", intent?: Intent) => void;
+  go: (view: View, intent?: Intent) => void;
   /** Mark the pending intent as handled. */
   clearIntent: () => void;
 }

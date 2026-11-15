@@ -1,6 +1,6 @@
-import { Copy, RefreshCw, Search } from "lucide-react";
+import { Copy, ExternalLink as OpenIcon, FolderOpen, RefreshCw, Search } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Button, EmptyState, ErrorNote, Input, PanelHeader, formatBytes } from "../../design";
+import { Button, EmptyState, ErrorNote, Input, PanelHeader, Select, formatBytes } from "../../design";
 import { cn } from "../../design/cn";
 import { ipc } from "../../ipc";
 import { subscribersOf, useNav } from "../../store/integrations";
@@ -15,6 +15,7 @@ export function NeedlePanel() {
   const go = useNav((s) => s.go);
   const [info, setInfo] = useState<NeedleIndexInfo | null | undefined>(undefined);
   const [query, setQuery] = useState("");
+  const [ext, setExt] = useState("");
   const [search, setSearch] = useState<NeedleSearch | null>(null);
   const [selected, setSelected] = useState<NeedleResult | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -37,7 +38,8 @@ export function NeedlePanel() {
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setSelected(null);
-    void find.run(async () => setSearch(await ipc.needleSearch(query)));
+    // An empty query with a type chosen lists the indexed files of that type.
+    void find.run(async () => setSearch(await ipc.needleSearch(query, 50, ext || undefined)));
   };
 
   const pick = (result: NeedleResult) => {
@@ -95,6 +97,16 @@ export function NeedlePanel() {
               onChange={(e) => setQuery(e.target.value)}
               placeholder='Words to find, or "an exact phrase"'
             />
+            {info && Object.keys(info.by_extension ?? {}).length > 1 ? (
+              <Select aria-label="File type" value={ext} onChange={(e) => setExt(e.target.value)}>
+                <option value="">All types</option>
+                {Object.entries(info.by_extension ?? {}).map(([e, count]) => (
+                  <option key={e} value={e === "(none)" ? "" : e} disabled={e === "(none)"}>
+                    {e} ({count})
+                  </option>
+                ))}
+              </Select>
+            ) : null}
             <Button type="submit" disabled={find.busy}>
               Search
             </Button>
@@ -129,6 +141,20 @@ export function NeedlePanel() {
                         {forgeListens ? (
                           <Button onClick={() => go("forge", { tool: "forge", addPath: r.path })}>Add to workflow →</Button>
                         ) : null}
+                        <Button
+                          variant="ghost"
+                          onClick={() => ipc.needleOpen(r.path).then(() => setNote(null), (e) => setNote(errorMessage(e)))}
+                        >
+                          <OpenIcon aria-hidden="true" />
+                          Open
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => ipc.needleReveal(r.path).then(() => setNote(null), (e) => setNote(errorMessage(e)))}
+                        >
+                          <FolderOpen aria-hidden="true" />
+                          Reveal in folder
+                        </Button>
                         <Button variant="ghost" onClick={() => copy(r.path)}>
                           <Copy aria-hidden="true" />
                           Copy path

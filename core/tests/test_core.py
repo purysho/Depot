@@ -21,7 +21,10 @@ from pathlib import Path
 CORE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CORE))
 
+from depot_core import vendor  # noqa: E402
 from depot_core.server import build_server  # noqa: E402
+
+vendor.install()  # tests import the tools directly, whatever order they run in
 
 
 class Harness:
@@ -140,6 +143,57 @@ class RelayTests(unittest.TestCase):
             self.assertEqual(events[-1][0], "relay.request_failed")
 
 
+class RelayMoreTests(unittest.TestCase):
+    def test_saved_requests_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            h = Harness()
+            reply, _, _ = h.call("relay.save", {"store_dir": d, "name": "health", "request": {"method": "get", "url": "http://x/health"}})
+            self.assertEqual([r["name"] for r in reply["result"]], ["health"])
+            reply, _, _ = h.call("relay.saved", {"store_dir": d})
+            self.assertEqual(reply["result"][0]["request"]["method"], "GET")
+            reply, _, _ = h.call("relay.delete_saved", {"store_dir": d, "name": "health"})
+            self.assertEqual(reply["result"], [])
+
+    def test_mock_server_answers_on_localhost_and_stops(self):
+        import urllib.request
+
+        h = Harness()
+        reply, events, _ = h.call("relay.mock_start", {"port": 0, "routes": [{"path": "/ping", "status": 201, "body": '{"pong": true}'}]})
+        port = reply["result"]["port"]
+        self.assertEqual(dict(events)["relay.mock_started"], {"port": port, "routes": ["/ping"]})
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=5) as r:
+                self.assertEqual((r.status, r.read()), (201, b'{"pong": true}'))
+            listed, _, _ = h.call("relay.mock_list")
+            self.assertIn(port, [m["port"] for m in listed["result"]])
+        finally:
+            reply, events, _ = h.call("relay.mock_stop", {"port": port})
+        self.assertEqual(dict(events)["relay.mock_stopped"], {"port": port})
+        with self.assertRaises(OSError):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=2)
+
+    def test_mock_rejects_bad_status_and_busy_ports(self):
+        h = Harness()
+        reply, _, _ = h.call("relay.mock_start", {"port": 0, "routes": [{"path": "/", "status": 999}]})
+        self.assertEqual(reply["error"]["kind"], "invalid")
+        first, _, _ = h.call("relay.mock_start", {"port": 0, "routes": [{"path": "/"}]})
+        port = first["result"]["port"]
+        try:
+            again, _, _ = h.call("relay.mock_start", {"port": port, "routes": [{"path": "/"}]})
+            self.assertEqual(again["error"]["kind"], "invalid")
+        finally:
+            h.call("relay.mock_stop", {"port": port})
+
+    def test_shutdown_stops_mock_servers(self):
+        import urllib.request
+
+        h = Harness()
+        port = h.call("relay.mock_start", {"port": 0, "routes": [{"path": "/"}]})[0]["result"]["port"]
+        h.call("core.shutdown")
+        with self.assertRaises(OSError):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+
+
 class PulseTests(unittest.TestCase):
     def test_new_and_closed_ports_after_the_baseline(self):
         from depot_core.tools import pulse
@@ -256,6 +310,31 @@ class ForgeSafetyTests(unittest.TestCase):
             _, events, _ = self.run_workflow(steps, d)
             self.assertNotIn(secret, json.dumps(events))
             self.assertEqual(dict(events)["forge.step_failed"]["label"], "command step 1")
+
+
+class ForgeFileTests(unittest.TestCase):
+    def test_export_then_import_round_trips_in_forges_format(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Path(d) / "forge"
+            h = Harness()
+            wf = {"name": "Ship", "description": "", "steps": [{"type": "mkdir", "config": {"path": "out"}}]}
+            h.call("forge.save", {"store_dir": str(store), "workflows": [wf]})
+            target = Path(d) / "ship.forge.json"
+            reply, _, _ = h.call("forge.export", {"store_dir": str(store), "index": 0, "path": str(target)})
+            self.assertEqual(reply["result"]["name"], "Ship")
+            from forge.storage import ForgeStore
+            self.assertEqual(ForgeStore.import_workflow(target).name, "Ship")  # standalone Forge can read it
+            reply, _, _ = h.call("forge.import", {"store_dir": str(store), "path": str(target)})
+            self.assertEqual([w["name"] for w in reply["result"]], ["Ship", "Ship"])
+
+    def test_import_rejects_files_that_are_not_workflows(self):
+        with tempfile.TemporaryDirectory() as d:
+            bad = Path(d) / "bad.json"
+            bad.write_text("[1, 2]")
+            reply, _, _ = Harness().call("forge.import", {"store_dir": d, "path": str(bad)})
+            self.assertEqual(reply["error"]["kind"], "invalid")
+            reply, _, _ = Harness().call("forge.import", {"store_dir": d, "path": str(Path(d) / "none.json")})
+            self.assertEqual(reply["error"]["kind"], "not_found")
 
 
 class RedactionTests(unittest.TestCase):
@@ -407,6 +486,32 @@ class HostGoneTests(unittest.TestCase):
         h.server._out = closed
         h.server.send({"event": "x", "payload": {}})  # must not raise
         self.assertTrue(h.server.host_gone)
+
+    def test_a_script_service_really_runs(self):
+        """In process, with every message kept: on failure this shows the
+        service's own output (switchyard.log), which says why it did not run."""
+        import switchyard_core as sy
+
+        with tempfile.TemporaryDirectory() as d:
+            state_path = Path(d) / "state.json"
+            pidfile = Path(d) / "pid"
+            script = Path(d) / "sleeper.py"
+            script.write_text(f"import os, time\nopen({str(pidfile)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n", encoding="utf-8")
+            project = sy.new_project(d, "demo")
+            service = sy.new_service(project, "sleeper", f'"{sys.executable}" "{script}"')
+            session = sy.new_session("dev", [service.id])
+            sy.save_state(sy.WorkspaceState(projects=[project], services=[service], sessions=[session]), state_path)
+            h = Harness()
+            params = {"session_id": session.id, "state_path": str(state_path), "runtime_path": str(Path(d) / "rt.json")}
+            reply, _, _ = h.call("switchyard.start_session", params)
+            try:
+                deadline = time.time() + 15
+                while not pidfile.exists() and time.time() < deadline:
+                    time.sleep(0.1)
+                time.sleep(0.5)
+                self.assertTrue(pidfile.exists(), "service output and events:\n" + h.out.getvalue())
+            finally:
+                h.call("switchyard.stop_session", {"session_id": session.id})
 
     def test_services_stop_when_depot_dies_without_warning(self):
         """Depot killed: both pipes close at once. Shutdown must still stop the

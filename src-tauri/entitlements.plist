@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the signed macOS build (used only when
+  release signing is configured; see docs/RELEASING.md).
+
+  depot-core is a PyInstaller one-file program: at start it unpacks the
+  Python runtime into a temporary folder and loads it from there.
+  PyInstaller signs those files with the same identity, so library
+  validation should pass; this entitlement is a precaution for that unusual
+  load path, recommended for PyInstaller apps. Remove it if a signed build
+  runs without it. Nothing else is granted: no JIT, no unsigned memory.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

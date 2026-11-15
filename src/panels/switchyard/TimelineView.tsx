@@ -14,6 +14,8 @@ export function describe(event: AnyBusEvent): string {
       return `Opened workspace ${event.payload.name}`;
     case "depot.panel_opened":
       return `Opened ${event.payload.tool}`;
+    case "depot.plugin_launched":
+      return `Launched plugin ${event.payload.name} · pid ${event.payload.pid}`;
     case "switchyard.session_started":
       return `Started session ${event.payload.name}`;
     case "switchyard.session_stopped":

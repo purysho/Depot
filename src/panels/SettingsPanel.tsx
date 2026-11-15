@@ -2,6 +2,7 @@ import { Settings } from "lucide-react";
 import { useState } from "react";
 import { Button, ErrorNote, Field, Input, PanelHeader, SectionTitle } from "../design";
 import { useWorkspace } from "../store/workspace";
+import { PluginSettings } from "./plugins/PluginSettings";
 
 /** Settings for the open workspace. Each change is validated and saved by Rust. */
 export function SettingsPanel({ version }: { version: string | null }) {
@@ -58,6 +59,9 @@ export function SettingsPanel({ version }: { version: string | null }) {
       ) : (
         <p className="m-0 text-sm text-text-secondary">Open a workspace to change its settings.</p>
       )}
+      <div className="mt-8">
+        <PluginSettings />
+      </div>
     </>
   );
 }

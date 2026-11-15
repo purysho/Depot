@@ -42,13 +42,17 @@ the layout under `~/.depot/`.
 | `core.shutdown` | — | — (refuses new work, drops queued requests, stops every workflow and session (sessions in parallel), and replies only when all have stopped) |
 | `needle.build_index` | `roots`, `index_path` | `needle.index_started`, `needle.index_complete` |
 | `needle.search` | `index_path`, `query`, `limit?`, `ext?` | `needle.search_complete` |
-| `needle.index_info` | `index_path` | — |
+| `needle.index_info` | `index_path` | — (includes `by_extension` counts) |
 | `relay.send` | `store_dir`, `request` | `relay.request_sent`, `relay.response_received` / `relay.request_failed` |
 | `relay.history` | `store_dir` | — |
+| `relay.saved`, `relay.save`, `relay.delete_saved` | `store_dir`, (`name`, `request`) | — (saved requests, by name) |
+| `relay.mock_start` | `port` (0 = any free), `routes` (`path`, `status`, `body`) | `relay.mock_started`; stream `relay.mock_log` |
+| `relay.mock_stop`, `relay.mock_list` | (`port`) | `relay.mock_stopped` |
 | `pulse.snapshot` | — | `pulse.snapshot`, and `pulse.port_listening` / `pulse.port_closed` for changes since the last snapshot |
 | `blackbox.scan` | `root`, `report_path` | `blackbox.scan_started`, `blackbox.scan_complete` / `blackbox.scan_failed` |
 | `blackbox.last_report` | `report_path` | — |
 | `forge.list`, `forge.save` | `store_dir`, (`workflows`) | — |
+| `forge.import`, `forge.export` | `store_dir`, `path`, (`index`) | — (`.forge.json` files; Rust picks `path` with a native dialog) |
 | `forge.validate` | `workflow`, `base_dir` | — (the checks `forge.run` makes, without running) |
 | `forge.run` | `run_id`, `workflow_id`, `workflow`, `base_dir` | `forge.run_started`, `forge.step_*`, `forge.run_finished`; stream `forge.log` |
 | `forge.stop` | `run_id` | — |

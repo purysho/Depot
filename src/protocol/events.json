@@ -22,6 +22,10 @@
       "timeline": true,
       "origin": "frontend"
     },
+    "depot.plugin_launched": {
+      "timeline": true,
+      "origin": "backend"
+    },
     "switchyard.session_started": {
       "timeline": true,
       "origin": "core"

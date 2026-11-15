@@ -10,8 +10,12 @@ import type {
   OcrStatus,
   PreflightCheck,
   PulseSnapshot,
+  MockRoute,
+  MockServerInfo,
+  PluginInfo,
   RelayHistoryItem,
   RelayRequest,
+  RelaySavedItem,
   RelaySendResult,
   ReviewTarget,
   SessionStatus,
@@ -79,12 +83,20 @@ export const ipc = {
 
   // plugins/needle.rs
   needleBuildIndex: () => invoke<{ documents: number; scanned: number; duration_ms: number }>("needle_build_index"),
-  needleSearch: (query: string, limit = 50) => invoke<NeedleSearch>("needle_search", { query, limit }),
+  needleSearch: (query: string, limit = 50, ext?: string) => invoke<NeedleSearch>("needle_search", { query, limit, ext: ext ?? null }),
+  needleOpen: (path: string) => invoke<void>("needle_open", { path }),
+  needleReveal: (path: string) => invoke<void>("needle_reveal", { path }),
   needleIndexInfo: () => invoke<NeedleIndexInfo | null>("needle_index_info"),
 
   // plugins/relay.rs
   relaySend: (request: RelayRequest) => invoke<RelaySendResult>("relay_send", { request }),
   relayHistory: () => invoke<RelayHistoryItem[]>("relay_history"),
+  relaySaved: () => invoke<RelaySavedItem[]>("relay_saved"),
+  relaySave: (name: string, request: RelayRequest) => invoke<RelaySavedItem[]>("relay_save", { name, request }),
+  relayDeleteSaved: (name: string) => invoke<RelaySavedItem[]>("relay_delete_saved", { name }),
+  relayMockStart: (port: number, routes: MockRoute[]) => invoke<MockServerInfo>("relay_mock_start", { port, routes }),
+  relayMockStop: (port: number) => invoke<unknown>("relay_mock_stop", { port }),
+  relayMockList: () => invoke<MockServerInfo[]>("relay_mock_list"),
 
   // plugins/pulse.rs
   pulseSnapshot: () => invoke<PulseSnapshot>("pulse_snapshot"),
@@ -102,6 +114,16 @@ export const ipc = {
   forgeRun: (index: number) => invoke<string>("forge_run", { index }),
   forgeStop: (runId: string) => invoke<unknown>("forge_stop", { runId }),
   forgeActive: () => invoke<string[]>("forge_active"),
+  /** Opens a native file dialog; null when cancelled. */
+  forgeImport: () => invoke<ForgeWorkflow[] | null>("forge_import"),
+  /** Opens a native save dialog; null when cancelled. */
+  forgeExport: (index: number, name: string) => invoke<{ path: string; name: string } | null>("forge_export", { index, name }),
+
+  pluginsList: () => invoke<PluginInfo[]>("plugins_list"),
+  /** Enabling approves the program and arguments exactly as they are now. */
+  pluginsSetEnabled: (id: string, enabled: boolean) => invoke<PluginInfo[]>("plugins_set_enabled", { id, enabled }),
+  /** Starts the plugin's program; resolves to its PID. */
+  pluginsLaunch: (id: string) => invoke<number>("plugins_launch", { id }),
 };
 
 /** Kept for the Settings panel. */

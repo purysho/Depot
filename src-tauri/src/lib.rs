@@ -16,6 +16,7 @@ pub mod error;
 pub mod paths;
 pub mod plugins;
 pub mod state;
+pub mod third_party;
 pub mod timeline;
 pub mod workspace;
 
@@ -92,6 +93,9 @@ pub fn run() {
             commands::bus_publish,
             commands::timeline_sessions,
             commands::timeline_read,
+            commands::plugins_list,
+            commands::plugins_set_enabled,
+            commands::plugins_launch,
             plugins::switchyard::switchyard_state,
             plugins::switchyard::switchyard_start_session,
             plugins::switchyard::switchyard_stop_session,
@@ -99,8 +103,16 @@ pub fn run() {
             plugins::needle::needle_build_index,
             plugins::needle::needle_search,
             plugins::needle::needle_index_info,
+            plugins::needle::needle_open,
+            plugins::needle::needle_reveal,
             plugins::relay::relay_send,
             plugins::relay::relay_history,
+            plugins::relay::relay_saved,
+            plugins::relay::relay_save,
+            plugins::relay::relay_delete_saved,
+            plugins::relay::relay_mock_start,
+            plugins::relay::relay_mock_stop,
+            plugins::relay::relay_mock_list,
             plugins::pulse::pulse_snapshot,
             plugins::blackbox::blackbox_scan,
             plugins::blackbox::blackbox_last_report,
@@ -112,6 +124,8 @@ pub fn run() {
             plugins::forge::forge_run,
             plugins::forge::forge_stop,
             plugins::forge::forge_active,
+            plugins::forge::forge_import,
+            plugins::forge::forge_export,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Depot")

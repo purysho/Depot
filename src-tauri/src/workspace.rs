@@ -214,6 +214,9 @@ pub fn update_tool(home: &Path, name: &str, tool: &str, patch: &Value) -> Result
 #[serde(default)]
 pub struct AppSettings {
     pub last_workspace: Option<String>,
+    /// Third-party plugins the person enabled, with the program and arguments
+    /// they approved (third_party.rs).
+    pub approved_plugins: std::collections::BTreeMap<String, crate::third_party::Approval>,
 }
 
 pub fn load_settings(home: &Path) -> AppSettings {

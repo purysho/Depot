@@ -1,4 +1,4 @@
-import { Play, Plus, Square, Trash, Workflow } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, Pencil, Play, Plus, Square, Trash, Upload, Workflow } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Input, PanelHeader, SectionTitle, Select, Textarea } from "../../design";
 import { cn } from "../../design/cn";
@@ -55,6 +55,9 @@ export function ForgePanel() {
     intent ? { type: "open", name: "", config: { path: intent.addPath }, timeout: 0, continue_on_error: false } : null,
   );
   const [newName, setNewName] = useState("");
+  // Index of the step being edited, or null when the editor adds a new step.
+  const [editing, setEditing] = useState<number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   // Kept in a store, not here: the run outlives this panel when you switch tools.
   const run = useForgeRun((s) => s.run);
   const beginRun = useForgeRun((s) => s.begin);
@@ -94,15 +97,48 @@ export function ForgePanel() {
     });
   };
 
-  const addStep = (event: React.FormEvent) => {
+  const updateSteps = (change: (steps: ForgeStep[]) => ForgeStep[]) =>
+    save(workflows.map((w, i) => (i === selected ? { ...w, steps: change(w.steps) } : w)));
+
+  const saveStep = (event: React.FormEvent) => {
     event.preventDefault();
     if (!draft || !workflow || draftMissing.length) return;
     const step = { ...draft, config: draft.type === "wait" ? { seconds: Number(draft.config.seconds) || 1 } : draft.config };
-    void save(workflows.map((w, i) => (i === selected ? { ...w, steps: [...w.steps, step] } : w))).then(() => setDraft(null));
+    void updateSteps((steps) => (editing === null ? [...steps, step] : steps.map((s, j) => (j === editing ? step : s)))).then(() => {
+      setDraft(null);
+      setEditing(null);
+    });
   };
 
-  const removeStep = (index: number) =>
-    save(workflows.map((w, i) => (i === selected ? { ...w, steps: w.steps.filter((_, j) => j !== index) } : w)));
+  const removeStep = (index: number) => updateSteps((steps) => steps.filter((_, j) => j !== index));
+
+  const moveStep = (index: number, by: -1 | 1) =>
+    updateSteps((steps) => {
+      const next = [...steps];
+      const [step] = next.splice(index, 1);
+      next.splice(index + by, 0, step!);
+      return next;
+    });
+
+  const editStep = (index: number) => {
+    setEditing(index);
+    setDraft(structuredClone(workflow!.steps[index]!));
+  };
+
+  const importWorkflow = () =>
+    task.run(async () => {
+      const next = await ipc.forgeImport();
+      if (!next) return; // cancelled
+      setWorkflows(next);
+      setSelected(next.length - 1);
+      setNote(`Imported “${next[next.length - 1]?.name}”. Read its steps before running it.`);
+    });
+
+  const exportWorkflow = () =>
+    task.run(async () => {
+      const done = await ipc.forgeExport(selected, workflow!.name);
+      if (done) setNote(`Exported “${done.name}” to ${done.path}.`);
+    });
 
   const start = () =>
     task.run(async () => {
@@ -137,6 +173,10 @@ export function ForgePanel() {
               <Plus aria-hidden="true" />
             </Button>
           </form>
+          <Button variant="ghost" className="mt-2 w-full" onClick={importWorkflow} disabled={task.busy}>
+            <Upload aria-hidden="true" />
+            Import .forge.json…
+          </Button>
         </aside>
 
         {workflow ? (
@@ -154,11 +194,26 @@ export function ForgePanel() {
                   Run
                 </Button>
               )}
-              <Button variant="ghost" onClick={() => setDraft({ type: "command", name: "", config: {}, timeout: 0, continue_on_error: false })}>
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setEditing(null);
+                  setDraft({ type: "command", name: "", config: {}, timeout: 0, continue_on_error: false });
+                }}
+              >
                 <Plus aria-hidden="true" />
                 Add step
               </Button>
+              <Button variant="ghost" onClick={exportWorkflow} disabled={task.busy} aria-label={`Export ${workflow.name}`}>
+                <Download aria-hidden="true" />
+                Export
+              </Button>
             </div>
+            {note ? (
+              <p role="status" className="m-0 text-sm text-text-secondary">
+                {note}
+              </p>
+            ) : null}
 
             <ol className="m-0 grid list-none gap-1 p-0">
               {workflow.steps.map((step, i) => {
@@ -178,6 +233,20 @@ export function ForgePanel() {
                         Show in Pulse →
                       </button>
                     ) : null}
+                    <Button variant="ghost" aria-label={`Move step ${i + 1} up`} onClick={() => moveStep(i, -1)} disabled={running || i === 0}>
+                      <ArrowUp aria-hidden="true" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      aria-label={`Move step ${i + 1} down`}
+                      onClick={() => moveStep(i, 1)}
+                      disabled={running || i === workflow.steps.length - 1}
+                    >
+                      <ArrowDown aria-hidden="true" />
+                    </Button>
+                    <Button variant="ghost" aria-label={`Edit step ${i + 1}`} onClick={() => editStep(i)} disabled={running}>
+                      <Pencil aria-hidden="true" />
+                    </Button>
                     <Button variant="ghost" aria-label={`Remove step ${i + 1}`} onClick={() => removeStep(i)} disabled={running}>
                       <Trash aria-hidden="true" />
                     </Button>
@@ -189,7 +258,7 @@ export function ForgePanel() {
 
             {draft ? (
               <Card>
-                <form onSubmit={addStep} className="grid gap-3">
+                <form onSubmit={saveStep} className="grid gap-3">
                   <div className="flex flex-wrap gap-3">
                     <Field label="Step type">
                       {(id) => (
@@ -251,7 +320,13 @@ export function ForgePanel() {
                     <Button type="submit" disabled={draftMissing.length > 0} title={draftMissing.length ? `Fill in: ${draftMissing.join(", ")}` : undefined}>
                       Save step
                     </Button>
-                    <Button variant="ghost" onClick={() => setDraft(null)}>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setDraft(null);
+                        setEditing(null);
+                      }}
+                    >
                       Cancel
                     </Button>
                   </div>
