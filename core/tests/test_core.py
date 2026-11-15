@@ -37,8 +37,8 @@ class Harness:
         self._read += len(lines)
         return [json.loads(line) for line in lines]
 
-    def call(self, method, params=None):
-        self.server._dispatch(1, method, params or {})
+    def call(self, method, params=None, workspace=None):
+        self.server._dispatch(1, method, params or {}, workspace)
         msgs = self.messages()
         reply = next(m for m in msgs if "id" in m)
         events = [(m["event"], m["payload"]) for m in msgs if "event" in m]
@@ -202,7 +202,7 @@ class ForgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             h = Harness()
             workflow = {"name": "t", "steps": [{"type": "command", "config": {"command": f'"{sys.executable}" -c "import sys; print(1); sys.exit(4)"'}}]}
-            reply, events, streams = h.call("forge.run", {"run_id": "r1", "workflow_id": "w1", "workflow": workflow})
+            reply, events, streams = h.call("forge.run", {"run_id": "r1", "workflow_id": "w1", "workflow": workflow, "base_dir": d})
             self.assertEqual(reply["result"]["outcome"], "failed")
             kinds = [e for e, _ in events]
             self.assertEqual(kinds, ["forge.run_started", "forge.step_started", "forge.step_failed", "forge.run_finished"])
@@ -217,8 +217,145 @@ class ForgeTests(unittest.TestCase):
             self.assertEqual(listed["result"][0]["name"], "t")
 
     def test_unknown_step_type_is_invalid(self):
-        reply, _, _ = Harness().call("forge.run", {"run_id": "r", "workflow_id": "w", "workflow": {"name": "t", "steps": [{"type": "launch-missiles"}]}})
+        with tempfile.TemporaryDirectory() as d:
+            reply, _, _ = Harness().call(
+                "forge.run", {"run_id": "r", "workflow_id": "w", "base_dir": d, "workflow": {"name": "t", "steps": [{"type": "launch-missiles"}]}}
+            )
         self.assertEqual(reply["error"]["kind"], "invalid")
+
+
+class ForgeSafetyTests(unittest.TestCase):
+    def run_workflow(self, steps, base):
+        return Harness().call("forge.run", {"run_id": "r", "workflow_id": "w", "base_dir": str(base), "workflow": {"name": "t", "steps": steps}})
+
+    def test_a_blank_delete_is_refused_before_anything_runs(self):
+        with tempfile.TemporaryDirectory() as d:
+            keep = Path(d) / "keep.txt"
+            keep.write_text("x")
+            reply, events, _ = self.run_workflow([{"type": "delete", "config": {"path": "  "}}], d)
+            self.assertEqual(reply["error"]["kind"], "invalid")
+            self.assertIn("path is empty", reply["error"]["message"])
+            self.assertEqual(events, [])  # nothing started
+            self.assertTrue(keep.exists())
+
+    def test_commands_and_relative_paths_run_in_the_workspace(self):
+        with tempfile.TemporaryDirectory() as d:
+            steps = [
+                {"type": "command", "config": {"command": f'"{sys.executable}" -c "import os; open(\'where.txt\', \'w\').write(os.getcwd())"'}},
+                {"type": "write", "config": {"path": "out/note.txt", "content": "hi"}},
+            ]
+            reply, _, _ = self.run_workflow(steps, d)
+            self.assertEqual(reply["result"]["outcome"], "completed", reply)
+            self.assertEqual(Path((Path(d) / "where.txt").read_text()).resolve(), Path(d).resolve())
+            self.assertEqual((Path(d) / "out" / "note.txt").read_text(), "hi")
+
+    def test_event_labels_never_carry_the_command_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            secret = "s3cr3t-value"
+            steps = [{"type": "command", "config": {"command": f'"{sys.executable}" -c "import sys; sys.exit(2)" --password {secret}'}}]
+            _, events, _ = self.run_workflow(steps, d)
+            self.assertNotIn(secret, json.dumps(events))
+            self.assertEqual(dict(events)["forge.step_failed"]["label"], "command step 1")
+
+
+class RedactionTests(unittest.TestCase):
+    def test_urls_lose_credentials_and_queries(self):
+        from depot_core import redact
+
+        self.assertEqual(redact.url("https://bob:hunter2@api.example.com:8443/v1/x?token=abc#frag"), "https://api.example.com:8443/v1/x")
+        self.assertEqual(redact.url("http://[::1]:80/a?b=c"), "http://[::1]:80/a")
+
+    def test_free_text_is_cleaned(self):
+        from depot_core import redact
+
+        out = redact.text("failed to reach https://u:pw@h/p?key=1 with password=hunter2 and Authorization: Bearer abc.def")
+        for leaked in ("pw@", "key=1", "hunter2", "abc.def"):
+            self.assertNotIn(leaked, out)
+        self.assertNotIn("tok-123", redact.text("deploy --api-key tok-123 --token=tok-123"))
+        self.assertNotIn("abcdefghij", redact.text("sent Bearer abcdefghij"))
+        # Ordinary prose is not mangled.
+        for prose in ("Session started", "token count is 4", "the secret of good code", "auth failed"):
+            self.assertEqual(redact.text(prose), prose)
+
+    def test_relay_events_drop_userinfo_and_secrets_in_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            request = {"method": "GET", "url": "http://alice:topsecret@127.0.0.1:1/x?token=abc"}
+            _, events, _ = Harness().call("relay.send", {"store_dir": d, "request": request})
+            dumped = json.dumps(events)
+            for leaked in ("alice", "topsecret", "token=abc"):
+                self.assertNotIn(leaked, dumped)
+
+
+class WorkspaceAttributionTests(unittest.TestCase):
+    def test_events_carry_the_workspace_of_the_request_that_caused_them(self):
+        h = Harness()
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "a.md").write_text("alpha")
+            h.server._dispatch(1, "needle.build_index", {"roots": [d], "index_path": str(Path(d) / "i.json")}, "workspace-a")
+        events = [m for m in h.messages() if "event" in m]
+        self.assertTrue(events)
+        self.assertTrue(all(m["workspace"] == "workspace-a" for m in events))
+
+
+class ShutdownTests(unittest.TestCase):
+    def test_nothing_starts_once_shutdown_has_begun(self):
+        h = Harness()
+        h.server.begin_shutdown()
+        with tempfile.TemporaryDirectory() as d:
+            marker = Path(d) / "ran"
+            reply, _, _ = h.call(
+                "forge.run",
+                {"run_id": "late", "workflow_id": "w", "base_dir": d, "workflow": {"name": "t", "steps": [{"type": "write", "config": {"path": str(marker)}}]}},
+            )
+            self.assertEqual(reply["error"]["kind"], "shutting_down")
+            self.assertFalse(marker.exists())
+
+    def test_queued_requests_are_dropped_not_run(self):
+        """A request still waiting in the queue when shutdown begins never runs."""
+        from depot_core.server import Server
+
+        server = Server(io.StringIO(), workers=1)
+        gate = threading.Event()
+        ran = []
+        server.register("test.block", lambda _p, _c: gate.wait(5))
+        server.register("test.record", lambda _p, _c: ran.append(1))
+        server.handle_line(json.dumps({"id": 1, "method": "test.block"}))
+        server.handle_line(json.dumps({"id": 2, "method": "test.record"}))  # queued behind the block
+        server.shutting_down = True
+        server._pool.shutdown(wait=False, cancel_futures=True)
+        gate.set()
+        server._pool.shutdown(wait=True)
+        self.assertEqual(ran, [])
+
+    def test_core_shutdown_stops_sessions_and_waits_for_them(self):
+        import switchyard_core as sy
+
+        with tempfile.TemporaryDirectory() as d:
+            state_path = Path(d) / "state.json"
+            project = sy.new_project(d, "demo")
+            sessions, services = [], []
+            for n in range(2):
+                svc = sy.new_service(project, f"s{n}", f'"{sys.executable}" -c "import time; time.sleep(60)"')
+                services.append(svc)
+                sessions.append(sy.new_session(f"dev{n}", [svc.id]))
+            sy.save_state(sy.WorkspaceState(projects=[project], services=services, sessions=sessions), state_path)
+            h = Harness()
+            for se in sessions:
+                reply, _, _ = h.call("switchyard.start_session", {"session_id": se.id, "state_path": str(state_path), "runtime_path": str(Path(d) / "rt.json")})
+                self.assertTrue(reply["result"]["started"])
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                status, _, _ = h.call("switchyard.status")
+                if all(s["services"][0]["pid"] for s in status["result"]):
+                    break
+                time.sleep(0.1)
+            pids = [s["services"][0]["pid"] for s in status["result"]]
+            reply, _, _ = h.call("core.shutdown")
+            self.assertEqual(reply["result"], {"stopped": True})
+            # By the time the reply exists, every service is already gone.
+            self.assertFalse([pid for pid in pids if _alive(pid)])
+            reply, _, _ = h.call("switchyard.start_session", {"session_id": sessions[0].id, "state_path": str(state_path)})
+            self.assertEqual(reply["error"]["kind"], "shutting_down")
 
 
 class SwitchyardTests(unittest.TestCase):
@@ -238,10 +375,11 @@ class SwitchyardTests(unittest.TestCase):
             reply, _, _ = h.call("switchyard.state", paths)
             self.assertEqual(reply["result"]["sessions"][0]["name"], "dev")
 
-            reply, _, _ = h.call("switchyard.start_session", {**paths, "session_id": session.id})
+            reply, during, _ = h.call("switchyard.start_session", {**paths, "session_id": session.id})
             self.assertTrue(reply["result"]["started"], reply)
             deadline = time.time() + 15
-            seen: list[str] = []
+            # The session can announce itself before the reply is written.
+            seen: list[str] = [e for e, _ in during]
             while time.time() < deadline and "switchyard.service_ready" not in seen:
                 seen += [m["event"] for m in h.messages() if "event" in m]
                 time.sleep(0.1)
@@ -249,7 +387,8 @@ class SwitchyardTests(unittest.TestCase):
             self.assertIn("switchyard.service_ready", seen)
 
             status, _, _ = h.call("switchyard.status")
-            self.assertIsInstance(status["result"][0]["services"][0]["pid"], int)
+            mine = next(s for s in status["result"] if s["session_id"] == session.id)
+            self.assertIsInstance(mine["services"][0]["pid"], int)
 
             reply, events, _ = h.call("switchyard.stop_session", {"session_id": session.id})
             time.sleep(0.5)
@@ -291,11 +430,27 @@ class HostGoneTests(unittest.TestCase):
             params = {"session_id": session.id, "state_path": str(state_path), "runtime_path": str(Path(d) / "rt.json")}
             proc.stdin.write(json.dumps({"id": 1, "method": "switchyard.start_session", "params": params}) + "\n")
             proc.stdin.flush()
-            reply = next(m for m in map(json.loads, iter(proc.stdout.readline, "")) if m.get("id") == 1)
-            self.assertTrue(reply["result"]["started"], reply)
+            # Read everything depot-core says until the service reports in, so a
+            # failure shows Switchyard's events and the service's own output.
+            seen: list[dict] = []
+            ready = threading.Event()
+
+            def read() -> None:
+                for line in iter(proc.stdout.readline, ""):
+                    message = json.loads(line)
+                    seen.append(message)
+                    if message.get("event") in ("switchyard.service_ready", "switchyard.service_unhealthy"):
+                        ready.set()
+                        return
+
+            threading.Thread(target=read, daemon=True).start()
+            ready.wait(timeout=30)
             deadline = time.time() + 15
             while not pidfile.exists() and time.time() < deadline:
                 time.sleep(0.1)
+            self.assertTrue(pidfile.exists(), "the service never started; depot-core said:\n" + "\n".join(map(json.dumps, seen)))
+            started = next((m for m in seen if m.get("id") == 1), None)
+            self.assertTrue(started and started["result"]["started"], started)
             pid = int(pidfile.read_text())
 
             proc.stdout.close()  # the host is gone: nobody reads any more…
@@ -308,18 +463,12 @@ class HostGoneTests(unittest.TestCase):
 
 
 def _alive(pid: int) -> bool:
+    """Is a process running? A zombie (killed, not yet reaped) counts as dead."""
     if sys.platform == "win32":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True).stdout
-        return str(pid) in out
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    # A zombie is dead for our purposes.
-    try:
-        return Path(f"/proc/{pid}/status").read_text().find("State:\tZ") == -1
-    except OSError:
-        return True
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+        return str(pid) in out.split()
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
 
 
 class EntryPointTests(unittest.TestCase):

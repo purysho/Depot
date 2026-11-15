@@ -35,7 +35,10 @@ impl AppState {
         paths::tool_dir(&self.home, &self.current()?.name, tool)
     }
 
+    /// Call depot-core on behalf of the open workspace (if any), so events
+    /// the call causes are attributed to it even if it finishes after a switch.
     pub async fn core(&self, method: &str, params: Value) -> Result<Value> {
-        self.core.request(method, params).await
+        let workspace = self.workspace.lock().expect("workspace lock").as_ref().map(|c| c.name.clone());
+        self.core.request_in(workspace.as_deref(), method, params).await
     }
 }

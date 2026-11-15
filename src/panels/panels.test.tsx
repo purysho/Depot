@@ -16,6 +16,7 @@ const ipcMock = vi.hoisted(() => ({
     }),
   ),
   forgeList: vi.fn(() => Promise.resolve([{ name: "Release", description: "", steps: [] }])),
+  forgeActive: vi.fn(() => Promise.resolve([])),
   relayHistory: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock("../ipc", () => ({
@@ -27,7 +28,8 @@ vi.mock("../ipc", () => ({
 import { useLinks, useNav } from "../store/integrations";
 import { useWorkspace } from "../store/workspace";
 import { mergeFindings } from "./blackbox/BlackboxPanel";
-import { ForgePanel } from "./forge/ForgePanel";
+import { useForgeRun } from "../store/forge";
+import { ForgePanel, missingFields } from "./forge/ForgePanel";
 import { NeedlePanel } from "./needle/NeedlePanel";
 import { PulsePanel, matches, relayUrl, unhealthyFor } from "./pulse/PulsePanel";
 import { RelayPanel, parseHeaders } from "./relay/RelayPanel";
@@ -161,6 +163,28 @@ describe("integration UI", () => {
     render(<ForgePanel />);
     await waitFor(() => expect(screen.getByRole("textbox", { name: "File, folder or URL" })).toHaveValue("/w/deploy.sh"));
     await act(async () => undefined);
+  });
+
+  it("a running Forge workflow can still be stopped after visiting another tool", async () => {
+    ipcMock.forgeList.mockResolvedValueOnce([{ name: "Release", description: "", steps: [{ type: "wait", name: "", config: { seconds: 60 }, timeout: 0, continue_on_error: false }] }] as never);
+    useForgeRun.getState().begin("run-1", 0);
+    const first = render(<ForgePanel />);
+    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    first.unmount(); // navigating to another tool
+    ipcMock.forgeList.mockResolvedValueOnce([{ name: "Release", description: "", steps: [{ type: "wait", name: "", config: { seconds: 60 }, timeout: 0, continue_on_error: false }] }] as never);
+    render(<ForgePanel />);
+    expect(await screen.findByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+    useForgeRun.setState({ run: null });
+  });
+
+  it("a step with a blank required path cannot be added", async () => {
+    expect(missingFields({ type: "delete", name: "", config: { path: "   " }, timeout: 0, continue_on_error: false })).toEqual(["path"]);
+    expect(missingFields({ type: "copy", name: "", config: { source: "/a" }, timeout: 0, continue_on_error: false })).toEqual(["target"]);
+    expect(missingFields({ type: "wait", name: "", config: {}, timeout: 0, continue_on_error: false })).toEqual([]);
+    useNav.setState({ intent: { tool: "forge", addPath: "" } });
+    render(<ForgePanel />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save step" })).toBeDisabled());
   });
 
   it("every tool panel asks for a workspace when none is open", () => {

@@ -28,12 +28,27 @@ in `ocr` itself, and returns line-level review comments as JSON
 
 ### Detection
 
-When the panel opens it calls `ocr_status`, which looks for `ocr`
-(`ocr.exe` on Windows) on `PATH` and runs `ocr --version` with a 5-second
-limit. If either fails, the panel shows one line explaining that the review is
-optional and links to the project; nothing else changes. Detection runs each
-time the panel opens, so installing `ocr` while Depot is running is picked up
-without a restart.
+When the panel opens it calls `ocr_status`, which finds the **native** Open
+Code Review binary and runs it with `--version` (5-second limit). If that
+fails, the panel shows one line explaining that the review is optional and
+links to the project; nothing else changes. Detection runs each time the panel
+opens, so installing `ocr` while Depot is running is picked up without a
+restart.
+
+How the native binary is found (`find_ocr` in `plugins/blackbox.rs`):
+
+1. `opencodereview` on `PATH`.
+2. `ocr` on `PATH`, using `PATHEXT` on Windows — the install scripts put the
+   native binary there as `ocr` / `ocr.exe`.
+3. If that `ocr` is npm's launcher (`bin/ocr.js`, or `ocr.cmd` on Windows), the
+   native `opencodereview[.exe]` it would start, from the per-platform package
+   (`@alibaba-group/ocr-<os>-<arch>/bin/`) or the legacy `bin/` layout, as in
+   upstream `scripts/platform.js`.
+
+Depot runs the native binary rather than the npm launcher because the launcher
+passes its pipes to the native child: cancelling the launcher alone would leave
+the review running and holding the output open. If only the launcher can be
+found, it is used, and cancelling still stops the whole tree.
 
 `ocr` is never bundled with Depot.
 
@@ -59,7 +74,10 @@ The person picks what to review and presses **Run AI review**:
   stdout. Rust streams each stderr line to the panel
   (`depot://stream`, name `blackbox.ocr_progress`), which shows the latest one
   under the button.
-- One review at a time. **Cancel review** kills the process (`ocr_cancel`).
+- One review at a time. **Cancel review** stops the whole process tree
+  (`ocr_cancel`): `ocr` starts as the leader of its own process group, which is
+  killed as a group on macOS and Linux; on Windows `taskkill /T /F` stops the
+  tree.
 - The review is never started automatically and never as part of **Scan
   repository**, because it sends code to a third party. The panel says which
   version of `ocr` will run and that the diff goes to the provider configured

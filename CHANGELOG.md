@@ -23,6 +23,31 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   installed; its findings sit beside BLACKBOX's own and do not change the risk
   score.
 
+### Fixed (from code review of 273f741)
+- A Forge delete step with a blank path deleted the contents of depot-core's
+  working folder. Blank required fields are refused in the step editor, in
+  depot-core and in Forge itself (Forge `ed01627`).
+- Quitting Depot could leave Switchyard services running: depot-core was
+  killed after 5 s while services were still stopping. Depot now waits for
+  depot-core to confirm everything has stopped, sessions stop in parallel, and
+  Switchyard stops a service's whole process group (Switchyard `759af30`).
+- A workflow queued just before shutdown could start after cleanup ran.
+  Shutdown now refuses new work and drops the queue first.
+- Results of work started in one workspace and finishing after a switch were
+  recorded in the new workspace's timeline. Events now carry the workspace of
+  the request that caused them.
+- The event bus could stop listening in development builds (React's
+  double mount). Each caller now owns its subscription.
+- Forge commands without a working folder ran in depot-core's folder; they now
+  run in the workspace folder, and relative paths resolve against it.
+- Leaving the Forge panel lost control of a running workflow. Run state now
+  lives outside the panel and is restored when it reopens.
+- The timeline could record credentials from Relay URLs (`user:password@`),
+  Relay error text, and Forge step labels taken from command lines.
+- On Windows, an npm-installed `ocr` was not detected, and cancelling an
+  npm-installed review could leave the native process running. Depot now runs
+  the native binary and stops the whole process tree.
+
 ### Not yet
 - Relay's mock server, saved requests and request parameters; Needle's
   extension filter; Forge's workflow import/export, step reordering and

@@ -53,8 +53,14 @@ What runs, and with what reach:
   system's own tools. Its snapshots include full command lines, which can
   contain secrets passed as arguments; they stay in memory and are not
   written to the timeline.
-- **Events** recorded in the timeline never include header values, request
-  query strings, or the text of detected secrets.
+- **Events** recorded in the timeline never include header values, URL
+  credentials or query strings, Forge command lines, or the text of detected
+  secrets; error messages are cleaned of URLs and `key=value` credentials
+  before they are recorded (`core/depot_core/redact.py`). A step label you
+  type yourself is recorded, so do not put secrets in step names.
+- **Forge** refuses steps with blank required fields before running anything,
+  and will not delete a drive root, your home folder or the folder it runs in.
+  Commands without a working folder run in the workspace folder.
 - The webview cannot start programs or publish tool results: only Rust
   starts processes, and the bus accepts just two user-action events from it.
 

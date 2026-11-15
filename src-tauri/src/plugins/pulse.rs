@@ -30,7 +30,7 @@ pub fn start_poller(app: AppHandle) {
             let interval = match state.current() {
                 Ok(ctx) => {
                     let core = Arc::clone(&state.core);
-                    match core.request("pulse.snapshot", json!({})).await {
+                    match core.request_in(Some(&ctx.name), "pulse.snapshot", json!({})).await {
                         Ok(snapshot) => {
                             let _ = app.emit(SNAPSHOT_EVENT, &snapshot);
                         }

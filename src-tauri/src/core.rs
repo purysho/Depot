@@ -21,10 +21,11 @@ use crate::error::{DepotError, ErrorKind, Result};
 /// A message from depot-core that is not a reply.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CoreMessage {
-    /// `{"event": type, "payload": {...}}` — goes onto the bus.
-    Event { event_type: String, payload: Value },
+    /// `{"event": type, "payload": {...}, "workspace": name}` — goes onto the bus.
+    /// `workspace` is the one the causing request was made in, if any.
+    Event { event_type: String, payload: Value, workspace: Option<String> },
     /// `{"stream": name, "params": {...}}` — UI-only (log lines, progress).
-    Stream { name: String, params: Value },
+    Stream { name: String, params: Value, workspace: Option<String> },
 }
 
 #[derive(Debug, PartialEq)]
@@ -54,11 +55,12 @@ fn parse_line(line: &str) -> Line {
         };
         return Line::Reply { id, result };
     }
+    let workspace = value.get("workspace").and_then(Value::as_str).map(str::to_string);
     if let (Some(t), Some(payload)) = (value.get("event").and_then(Value::as_str), value.get("payload")) {
-        return Line::Message(CoreMessage::Event { event_type: t.to_string(), payload: payload.clone() });
+        return Line::Message(CoreMessage::Event { event_type: t.to_string(), payload: payload.clone(), workspace });
     }
     if let (Some(name), Some(params)) = (value.get("stream").and_then(Value::as_str), value.get("params")) {
-        return Line::Message(CoreMessage::Stream { name: name.to_string(), params: params.clone() });
+        return Line::Message(CoreMessage::Stream { name: name.to_string(), params: params.clone(), workspace });
     }
     Line::Junk
 }
@@ -179,6 +181,12 @@ impl CoreClient {
 
     /// Send one request and wait for its reply.
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_in(None, method, params).await
+    }
+
+    /// Send one request on behalf of a workspace. Events the request causes,
+    /// even long after (a workflow finishing), come back tagged with it.
+    pub async fn request_in(&self, workspace: Option<&str>, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         {
@@ -189,7 +197,11 @@ impl CoreClient {
             }
             let running = guard.as_mut().expect("just started");
             running.pending.lock().expect("pending lock").insert(id, tx);
-            let mut line = serde_json::to_vec(&json!({"id": id, "method": method, "params": params}))?;
+            let mut message = json!({"id": id, "method": method, "params": params});
+            if let Some(ws) = workspace {
+                message["workspace"] = json!(ws);
+            }
+            let mut line = serde_json::to_vec(&message)?;
             line.push(b'\n');
             if let Err(err) = running.stdin.write_all(&line).and_then(|()| running.stdin.flush()) {
                 running.pending.lock().expect("pending lock").remove(&id);
@@ -198,6 +210,28 @@ impl CoreClient {
             }
         }
         rx.await.unwrap_or_else(|_| Err(DepotError::core("depot-core stopped before replying")))
+    }
+
+    /// Quit cleanly: ask depot-core to stop every workflow and service and
+    /// wait for it to confirm (up to `limit`), then close it. Asking first
+    /// matters: closing stdin alone gives no way to know when cleanup is done,
+    /// and killing depot-core mid-cleanup would leave services running.
+    pub fn shutdown_gracefully(&self, limit: std::time::Duration) {
+        let alive = self
+            .running
+            .lock()
+            .expect("core lock")
+            .as_mut()
+            .is_some_and(|r| matches!(r.child.try_wait(), Ok(None)));
+        if alive {
+            let confirmed = tauri::async_runtime::block_on(async {
+                tokio::time::timeout(limit, self.request("core.shutdown", json!({}))).await
+            });
+            if !matches!(confirmed, Ok(Ok(_))) {
+                eprintln!("depot: depot-core did not confirm shutdown within {limit:?}");
+            }
+        }
+        self.shutdown();
     }
 
     /// Close stdin so depot-core stops its work and exits, then reap it.
@@ -235,11 +269,15 @@ mod tests {
         assert_eq!((err.kind, err.message.as_str()), (ErrorKind::NotFound, "gone"));
         assert_eq!(
             parse_line(r#"{"event": "pulse.snapshot", "payload": {"process_count": 1}}"#),
-            Line::Message(CoreMessage::Event { event_type: "pulse.snapshot".into(), payload: json!({"process_count": 1}) })
+            Line::Message(CoreMessage::Event { event_type: "pulse.snapshot".into(), payload: json!({"process_count": 1}), workspace: None })
         );
         assert_eq!(
             parse_line(r#"{"stream": "forge.log", "params": {"line": "x"}}"#),
-            Line::Message(CoreMessage::Stream { name: "forge.log".into(), params: json!({"line": "x"}) })
+            Line::Message(CoreMessage::Stream { name: "forge.log".into(), params: json!({"line": "x"}), workspace: None })
+        );
+        assert_eq!(
+            parse_line(r#"{"event": "needle.index_started", "payload": {}, "workspace": "api"}"#),
+            Line::Message(CoreMessage::Event { event_type: "needle.index_started".into(), payload: json!({}), workspace: Some("api".into()) })
         );
         assert_eq!(parse_line("Traceback (most recent call last):"), Line::Junk);
     }
@@ -247,6 +285,77 @@ mod tests {
     fn python() -> Option<PathBuf> {
         let name = std::env::var("DEPOT_PYTHON").unwrap_or_else(|_| if cfg!(windows) { "python".into() } else { "python3".into() });
         which::which(name).ok()
+    }
+
+    /// Quitting waits until Switchyard's services are really gone (review
+    /// finding: a fixed five-second cutoff killed depot-core mid-cleanup).
+    #[cfg(unix)]
+    #[test]
+    fn graceful_shutdown_returns_only_after_services_have_stopped() {
+        let Some(py) = python() else {
+            eprintln!("skipping: no python");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state.json");
+        // Build a Switchyard state with one long-running service, using
+        // Switchyard's own code so the file format is always right.
+        let vendor = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vendor/switchyard");
+        let script = format!(
+            "import sys; sys.path.insert(0, {vendor:?})\n\
+             import switchyard_core as sy, pathlib\n\
+             p = sy.new_project({root:?}, 'demo')\n\
+             ss = [sy.new_service(p, f'stubborn{{i}}', {cmd:?}) for i in range(3)]\n\
+             se = sy.new_session('dev', [s.id for s in ss]); se.id = 'dev'\n\
+             sy.save_state(sy.WorkspaceState(projects=[p], services=ss, sessions=[se]), pathlib.Path({state:?}))\n",
+            vendor = vendor.display().to_string(),
+            root = dir.path().display().to_string(),
+            // Ignores SIGTERM, so Switchyard waits out each service's grace
+            // period before killing it: three take longer than the old 5 s cutoff.
+            cmd = format!(
+                "{} -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'",
+                py.display()
+            ),
+            state = state.display().to_string(),
+        );
+        assert!(Command::new(&py).args(["-c", &script]).status().unwrap().success());
+
+        let mut launch = Launch::from_source();
+        launch.program = py;
+        let client = CoreClient::new(launch, Arc::new(|_| {}));
+        let params = json!({"session_id": "dev", "state_path": state, "runtime_path": dir.path().join("rt.json")});
+        let started = tauri::async_runtime::block_on(client.request("switchyard.start_session", params)).unwrap();
+        assert_eq!(started["started"], true, "{started}");
+        let mut pids: Vec<String> = Vec::new();
+        for _ in 0..150 {
+            let status = tauri::async_runtime::block_on(client.request("switchyard.status", json!({}))).unwrap();
+            pids = status[0]["services"].as_array().unwrap().iter().filter_map(|s| s["pid"].as_u64()).map(|p| p.to_string()).collect();
+            if pids.len() == 3 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert_eq!(pids.len(), 3, "all three services started");
+        // Let the Python processes install their SIGTERM handlers.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let started_at = std::time::Instant::now();
+        client.shutdown_gracefully(std::time::Duration::from_secs(30));
+        assert!(started_at.elapsed() > std::time::Duration::from_secs(5), "this setup should need more than the old cutoff");
+
+        // Each service runs as `sh -c python …` in its own process group led
+        // by the shell. Check every member of each group: an orphaned program
+        // whose shell already exited is exactly the failure to catch.
+        let table = Command::new("ps").args(["-eo", "pgid=,pid=,stat="]).output().unwrap();
+        let table = String::from_utf8_lossy(&table.stdout);
+        for leader in &pids {
+            for row in table.lines() {
+                let cols: Vec<&str> = row.split_whitespace().collect();
+                if cols.len() == 3 && cols[0] == leader {
+                    assert!(cols[2].starts_with('Z'), "process {} of service group {leader} outlived Depot", cols[1]);
+                }
+            }
+        }
     }
 
     /// End to end against the real sidecar and the pinned tool cores.

@@ -1,7 +1,6 @@
 """Relay: send HTTP requests and keep the workspace's request history."""
 from __future__ import annotations
 
-import urllib.parse
 import uuid
 from typing import Any
 
@@ -10,6 +9,7 @@ from relay.models import RequestSpec
 from relay.storage import RelayStore
 
 from depot_core import params as p
+from depot_core import redact
 from depot_core.server import Context, Server, invalid
 
 METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
@@ -19,12 +19,6 @@ def _store(params: dict[str, Any]) -> RelayStore:
     store_dir = p.path(params, "store_dir")
     assert store_dir is not None
     return RelayStore(store_dir)
-
-
-def _without_query(url: str) -> str:
-    """The URL as recorded in events: query values can hold tokens, so drop them."""
-    parts = urllib.parse.urlsplit(url)
-    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
 def _spec(raw: dict[str, Any]) -> RequestSpec:
@@ -43,12 +37,13 @@ def send(params: dict[str, Any], ctx: Context) -> dict[str, Any]:
         target = build_url(spec.url, spec.params)
     except RelayError as exc:
         raise invalid(str(exc)) from exc
-    ctx.event("relay.request_sent", {"request_id": request_id, "method": spec.method, "url": _without_query(target)})
+    # Events are written to the timeline: no user:password@, no query string.
+    ctx.event("relay.request_sent", {"request_id": request_id, "method": spec.method, "url": redact.url(target)})
     try:
         result = perform_request(spec)
     except RelayError as exc:
         store.add_history(spec)
-        ctx.event("relay.request_failed", {"request_id": request_id, "error": str(exc)})
+        ctx.event("relay.request_failed", {"request_id": request_id, "error": redact.text(str(exc))})
         return {"request_id": request_id, "ok": False, "error": str(exc)}
     store.add_history(spec, result.status, result.elapsed_ms)
     ctx.event(

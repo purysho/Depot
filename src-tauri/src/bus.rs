@@ -127,6 +127,13 @@ impl Bus {
     }
 
     pub fn publish(&self, origin: Origin, event_type: &str, payload: Value) -> Result<Envelope> {
+        self.publish_for(origin, event_type, payload, None)
+    }
+
+    /// Publish on behalf of a workspace. Work started in workspace A that
+    /// finishes after a switch to B is stamped A, is not written to B's
+    /// timeline, and is ignored by B's panels (the frontend filters by it).
+    pub fn publish_for(&self, origin: Origin, event_type: &str, payload: Value, workspace: Option<&str>) -> Result<Envelope> {
         let spec = self
             .events
             .get(event_type)
@@ -147,12 +154,15 @@ impl Bus {
             id: uuid::Uuid::now_v7().to_string(),
             event_type: event_type.to_string(),
             source: source.to_string(),
-            workspace: session.as_ref().map(|s| s.workspace.clone()).unwrap_or_default(),
+            workspace: match workspace {
+                Some(ws) => ws.to_string(),
+                None => session.as_ref().map(|s| s.workspace.clone()).unwrap_or_default(),
+            },
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             payload,
         };
         if spec.timeline {
-            if let Some(s) = session.as_mut() {
+            if let Some(s) = session.as_mut().filter(|s| s.workspace == envelope.workspace) {
                 // A full disk must not stop the app working: report and carry on.
                 if let Err(err) = s.timeline.append(&serde_json::to_value(&envelope)?) {
                     eprintln!("depot: could not write timeline: {err}");
@@ -220,6 +230,22 @@ mod tests {
         let types: Vec<_> = page.events.iter().map(|e| e["type"].as_str().unwrap().to_string()).collect();
         assert_eq!(types, ["depot.session_started", "pulse.port_listening", "depot.session_ended"]);
         assert_eq!(page.events[1]["workspace"], "api");
+    }
+
+    #[test]
+    fn work_from_another_workspace_keeps_its_name_and_stays_out_of_this_timeline() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bus, seen) = bus();
+        let file = bus.open_session("b", dir.path(), "0.1.0").unwrap();
+        let env = bus
+            .publish_for(Origin::Core, "blackbox.scan_started", json!({"root": "/a"}), Some("a"))
+            .unwrap();
+        assert_eq!(env.workspace, "a");
+        assert_eq!(seen.0.lock().unwrap().last().unwrap().workspace, "a");
+        bus.publish_for(Origin::Core, "blackbox.scan_started", json!({"root": "/b"}), Some("b")).unwrap();
+        let page = crate::timeline::read(dir.path(), &file, 0, 10).unwrap();
+        let roots: Vec<_> = page.events.iter().filter_map(|e| e["payload"]["root"].as_str()).collect();
+        assert_eq!(roots, ["/b"]);
     }
 
     #[test]

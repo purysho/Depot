@@ -100,7 +100,10 @@ Conventions:
 - **Timeline** says whether the event is written to the session timeline.
   Events marked "no" are high-rate and live-only.
 - Payloads never carry secrets: no header values, no environment values, no
-  matched secret text.
+  matched secret text. URLs keep only scheme, host, port and path (no
+  `user:password@`, no query); error text is cleaned the same way and has
+  `password=…`, `--token …` and `Bearer …` values masked; Forge step labels are
+  the step's own name or "command step 2", never the command line.
 
 ### Depot
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ import switchyard_core as sy
 import switchyard_runtime as rt
 
 from depot_core import params as p
-from depot_core.server import Context, Server, invalid, not_found
+from depot_core.server import Context, CoreError, Server, invalid, not_found
 
 # session_id -> running controller and our own bookkeeping
 _sessions: dict[str, dict[str, Any]] = {}
@@ -127,6 +128,10 @@ def start_session(params: dict[str, Any], ctx: Context) -> dict[str, Any]:
     if blockers:
         return {"started": False, "checks": checks_out}
     with _lock:
+        # Checked under the lock stop_all takes its list with: no session can
+        # start after shutdown has collected what to stop.
+        if ctx.shutting_down:
+            raise CoreError("shutting_down", "depot-core is shutting down")
         if session_id in _sessions and _sessions[session_id]["controller"].running:
             raise invalid(f"{session.name} is already running")
         box: dict[str, Any] = {}
@@ -159,6 +164,10 @@ def stop_session(params: dict[str, Any], _ctx: Context) -> dict[str, Any]:
 def status(_params: dict[str, Any], _ctx: Context) -> list[dict[str, Any]]:
     out = []
     with _lock:
+        # Forget sessions that have finished stopping: they are not running in
+        # Depot any more, and Switchyard's state shows them as idle.
+        for sid in [sid for sid, box in _sessions.items() if box.get("stopping") and not box["controller"].running]:
+            del _sessions[sid]
         boxes = list(_sessions.items())
     for session_id, box in boxes:
         controller = box["controller"]
@@ -179,14 +188,25 @@ def status(_params: dict[str, Any], _ctx: Context) -> list[dict[str, Any]]:
 
 
 def stop_all(_server: Server) -> None:
+    """Stop every session, all at the same time, and return once they have
+    stopped. Within a session Switchyard stops services one by one in reverse
+    dependency order, each with its own grace period; running sessions side by
+    side keeps the total close to the slowest one rather than their sum."""
     with _lock:
         boxes = list(_sessions.values())
-    for box in boxes:
+
+    def stop(box: dict[str, Any]) -> None:
         box["stopping"] = True
         try:
             box["controller"].stop()
         except Exception:  # noqa: BLE001 — best effort on shutdown
-            pass
+            traceback.print_exc()
+
+    threads = [threading.Thread(target=stop, args=(box,)) for box in boxes]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
 
 
 def register(server: Server) -> None:

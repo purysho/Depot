@@ -128,8 +128,108 @@ pub fn map_review(output: &Value) -> Value {
     })
 }
 
+/// The native Open Code Review binary, wherever it was installed from.
+///
+/// - The install scripts put a native binary named `ocr` (`ocr.exe`) on PATH.
+/// - npm installs `ocr` as a Node launcher (`bin/ocr.js`; on Windows an
+///   `ocr.cmd` shim) that starts the native `opencodereview[.exe]` from a
+///   per-platform package. Depot runs that native binary itself rather than
+///   the launcher: the launcher's child inherits its pipes, so cancelling the
+///   launcher alone would leave the real review running
+///   (open-code-review: bin/ocr.js, scripts/platform.js).
+///
+/// If a launcher is found but not its native binary, the launcher is used
+/// and cancellation kills the whole process tree.
 fn find_ocr() -> Option<PathBuf> {
-    which::which(if cfg!(windows) { "ocr.exe" } else { "ocr" }).ok()
+    let native_name = if cfg!(windows) { "opencodereview.exe" } else { "opencodereview" };
+    if let Ok(native) = which::which(native_name) {
+        return Some(native);
+    }
+    // No extension: on Windows `which` tries PATHEXT, so this finds ocr.exe
+    // from the install script as well as npm's ocr.cmd shim.
+    let found = which::which("ocr").ok()?;
+    Some(if is_launcher(&found) { native_behind(&found).unwrap_or(found) } else { found })
+}
+
+/// A script rather than a native program: npm's Node launcher or Windows shims.
+fn is_launcher(path: &Path) -> bool {
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let ext = target.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if matches!(ext.as_deref(), Some("js" | "cmd" | "bat" | "ps1")) {
+        return true;
+    }
+    let mut head = [0u8; 2];
+    std::fs::File::open(&target).and_then(|mut f| f.read_exact(&mut head)).is_ok() && &head == b"#!"
+}
+
+/// Platform package suffix used by open-code-review (scripts/platform.js).
+fn platform_key() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "linux-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("macos", "x86_64") => "darwin-x64",
+        ("macos", "aarch64") => "darwin-arm64",
+        ("windows", "x86_64") => "win32-x64",
+        ("windows", "aarch64") => "win32-arm64",
+        _ => return None,
+    })
+}
+
+/// Where npm puts the native binary next to the launcher at `launcher`.
+pub fn native_behind(launcher: &Path) -> Option<PathBuf> {
+    let native_name = if cfg!(windows) { "opencodereview.exe" } else { "opencodereview" };
+    let key = platform_key()?;
+    let canonical = std::fs::canonicalize(launcher).unwrap_or_else(|_| launcher.to_path_buf());
+    let mut packages = Vec::new();
+    // Unix: the PATH entry is a symlink to <pkg>/bin/ocr.js.
+    if canonical.file_name().is_some_and(|n| n == "ocr.js") {
+        if let Some(pkg) = canonical.parent().and_then(Path::parent) {
+            packages.push(pkg.to_path_buf());
+        }
+    }
+    // Windows: <npm prefix>\ocr.cmd next to <npm prefix>\node_modules.
+    if let Some(dir) = launcher.parent() {
+        packages.push(dir.join("node_modules").join("@alibaba-group").join("open-code-review"));
+    }
+    packages.into_iter().find_map(|pkg| {
+        let platform_pkg = format!("ocr-{key}");
+        [
+            pkg.join("node_modules").join("@alibaba-group").join(&platform_pkg),
+            pkg.parent().map(|scope| scope.join(&platform_pkg)).unwrap_or_default(),
+            pkg.clone(), // legacy layout: <pkg>/bin/opencodereview
+        ]
+        .into_iter()
+        .map(|dir| dir.join("bin").join(native_name))
+        .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Start `program` as the leader of its own process group (Unix) so the
+/// whole tree can be stopped together.
+fn own_group(cmd: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Stop a process and everything it started.
+pub fn kill_tree(child: &mut Child) {
+    let pid = child.id().to_string();
+    #[cfg(unix)]
+    let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
+    #[cfg(windows)]
+    let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &pid]).status();
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Run a short command and wait at most `limit`; kill it if it hangs.
@@ -161,6 +261,8 @@ pub async fn ocr_status() -> Result<OcrStatus> {
             return OcrStatus { available: false, path: None, version: None };
         };
         let version = quick_output(&path, &["--version"], Duration::from_secs(5));
+        // `--version` may print a launcher banner first; keep the last line.
+        let version = version.map(|v| v.lines().last().unwrap_or_default().trim().to_string());
         OcrStatus { available: version.is_some(), path: Some(path), version }
     })
     .await
@@ -179,7 +281,7 @@ pub async fn ocr_review(app: AppHandle, state: State<'_, AppState>, target: Revi
         if guard.is_some() {
             return Err(DepotError::new(ErrorKind::Busy, "A review is already running"));
         }
-        let mut child = Command::new(&ocr)
+        let mut child = own_group(&mut Command::new(&ocr))
             .args(&args)
             .current_dir(&repo)
             .stdin(Stdio::null())
@@ -241,8 +343,7 @@ pub async fn ocr_cancel(state: State<'_, AppState>) -> Result<bool> {
     let child = state.ocr.0.lock().expect("ocr lock").take();
     Ok(match child {
         Some(mut c) => {
-            let _ = c.kill();
-            let _ = c.wait();
+            kill_tree(&mut c);
             true
         }
         None => false,
@@ -286,6 +387,67 @@ mod tests {
         assert_eq!(review["findings"][1]["severity"], "info"); // no severity given
         assert_eq!(review["by_severity"]["high"], 1);
         assert_eq!(review["status"], "completed_with_warnings");
+    }
+
+    #[test]
+    fn finds_the_native_binary_behind_npms_launcher() {
+        let Some(key) = platform_key() else { return };
+        let native_name = if cfg!(windows) { "opencodereview.exe" } else { "opencodereview" };
+        let dir = tempfile::tempdir().unwrap();
+        // npm global layout: <prefix>/node_modules/@alibaba-group/{open-code-review, ocr-<key>}
+        let scope = dir.path().join("node_modules").join("@alibaba-group");
+        let pkg = scope.join("open-code-review");
+        std::fs::create_dir_all(pkg.join("bin")).unwrap();
+        std::fs::write(pkg.join("bin").join("ocr.js"), "#!/usr/bin/env node\n").unwrap();
+        let native = scope.join(format!("ocr-{key}")).join("bin").join(native_name);
+        std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+        std::fs::write(&native, "binary").unwrap();
+
+        // Windows shim: <prefix>/ocr.cmd
+        let shim = dir.path().join("ocr.cmd");
+        std::fs::write(&shim, "@node ...").unwrap();
+        assert!(is_launcher(&shim));
+        assert_eq!(native_behind(&shim), Some(native.clone()));
+
+        // Unix: <prefix>/bin/ocr -> ../node_modules/@alibaba-group/open-code-review/bin/ocr.js
+        #[cfg(unix)]
+        {
+            let bin = dir.path().join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::os::unix::fs::symlink(pkg.join("bin").join("ocr.js"), bin.join("ocr")).unwrap();
+            assert!(is_launcher(&bin.join("ocr")));
+            assert_eq!(native_behind(&bin.join("ocr")).map(|p| std::fs::canonicalize(p).unwrap()), Some(std::fs::canonicalize(&native).unwrap()));
+        }
+    }
+
+    #[test]
+    fn a_native_binary_is_not_mistaken_for_a_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let native = dir.path().join(if cfg!(windows) { "ocr.exe" } else { "ocr" });
+        std::fs::write(&native, [0x7f, b'E', b'L', b'F']).unwrap();
+        assert!(!is_launcher(&native));
+    }
+
+    /// The review's grandchildren die with it (the npm launcher case).
+    #[cfg(unix)]
+    #[test]
+    fn cancel_kills_the_whole_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("grandchild");
+        let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
+        let mut child = own_group(&mut Command::new("sh")).args(["-c", &script]).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pidfile.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let grandchild = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
+        kill_tree(&mut child);
+        std::thread::sleep(Duration::from_millis(200));
+        // A killed process can linger as a zombie when nothing reaps it (as in
+        // containers whose PID 1 does not); a zombie is dead for our purposes.
+        let state = Command::new("ps").args(["-o", "stat=", "-p", &grandchild]).output().unwrap();
+        let state = String::from_utf8_lossy(&state.stdout).trim().to_string();
+        assert!(state.is_empty() || state.starts_with('Z'), "grandchild {grandchild} survived: {state}");
     }
 
     #[test]

@@ -1,9 +1,9 @@
 import { Play, Plus, Square, Trash, Workflow } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, EmptyState, ErrorNote, Field, Input, PanelHeader, SectionTitle, Select, Textarea } from "../../design";
 import { cn } from "../../design/cn";
-import { events, ipc, listen, type StreamMessage } from "../../ipc";
-import { useBusEvent } from "../../store/bus";
+import { ipc } from "../../ipc";
+import { useForgeRun } from "../../store/forge";
 import { useIntent, useLinks, useNav } from "../../store/integrations";
 import { useWorkspace } from "../../store/workspace";
 import { STEP_TYPES, type ForgeStep, type ForgeWorkflow, type StepType } from "../../types/tools";
@@ -23,18 +23,25 @@ export const FIELDS: Record<StepType, Array<[key: string, label: string, multili
   open: [["path", "File, folder or URL"]],
 };
 
+/** Fields a step cannot run without (depot-core and Forge refuse them too). */
+export const REQUIRED: Partial<Record<StepType, string[]>> = {
+  command: ["command"],
+  copy: ["source", "target"],
+  move: ["source", "target"],
+  mkdir: ["path"],
+  write: ["path"],
+  delete: ["path"],
+  http: ["url"],
+  open: ["path"],
+};
+
+/** The required fields a step leaves blank. */
+export function missingFields(step: ForgeStep): string[] {
+  return (REQUIRED[step.type] ?? []).filter((key) => !String(step.config[key] ?? "").trim());
+}
+
 /** Where a path from Needle goes for each step type. */
 const PATH_FIELD: Partial<Record<StepType, string>> = { copy: "source", move: "source", write: "path", delete: "path", open: "path", mkdir: "path" };
-
-type StepState = "running" | "done" | "failed";
-
-interface RunView {
-  runId: string;
-  log: string[];
-  steps: Record<number, StepState>;
-  failedPid: Record<number, number | null>;
-  outcome: string | null;
-}
 
 export function ForgePanel() {
   const context = useWorkspace((s) => s.context);
@@ -48,43 +55,21 @@ export function ForgePanel() {
     intent ? { type: "open", name: "", config: { path: intent.addPath }, timeout: 0, continue_on_error: false } : null,
   );
   const [newName, setNewName] = useState("");
-  const [run, setRun] = useState<RunView | null>(null);
-  const runRef = useRef<RunView | null>(null);
-  useEffect(() => {
-    runRef.current = run;
-  }, [run]);
+  // Kept in a store, not here: the run outlives this panel when you switch tools.
+  const run = useForgeRun((s) => s.run);
+  const beginRun = useForgeRun((s) => s.begin);
+  const reattach = useForgeRun((s) => s.reattach);
   const task = useTask();
 
   const load = useCallback(() => {
     ipc.forgeList().then(setWorkflows, () => setWorkflows([]));
   }, []);
   useEffect(() => {
-    if (context) load();
-  }, [context, load]);
-
-  // Live log lines for the current run.
-  useEffect(() => {
-    const off = listen<StreamMessage>(events.stream, (m) => {
-      if (m.name !== "forge.log") return;
-      setRun((r) => (r && m.params.run_id === r.runId ? { ...r, log: [...r.log, String(m.params.line)].slice(-500) } : r));
-    });
-    return () => void off.then((f) => f());
-  }, []);
-
-  const mine = <T extends { run_id: string }>(p: T) => runRef.current?.runId === p.run_id;
-  useBusEvent("forge.step_started", ({ payload }) => {
-    if (mine(payload)) setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "running" } });
-  });
-  useBusEvent("forge.step_succeeded", ({ payload }) => {
-    if (mine(payload)) setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "done" } });
-  });
-  useBusEvent("forge.step_failed", ({ payload }) => {
-    if (mine(payload))
-      setRun((r) => r && { ...r, steps: { ...r.steps, [payload.step_index]: "failed" }, failedPid: { ...r.failedPid, [payload.step_index]: payload.pid } });
-  });
-  useBusEvent("forge.run_finished", ({ payload }) => {
-    if (mine(payload)) setRun((r) => r && { ...r, outcome: payload.outcome });
-  });
+    if (context) {
+      load();
+      void reattach();
+    }
+  }, [context, load, reattach]);
 
   if (!context) return <NoWorkspace tool="Forge" />;
 
@@ -96,6 +81,9 @@ export function ForgePanel() {
 
   const workflow = workflows[selected];
   const running = run !== null && run.outcome === null;
+  // Step badges belong to the workflow that ran, not whichever is selected.
+  const shown = run && (run.workflowIndex === null || run.workflowIndex === selected) ? run : null;
+  const draftMissing = draft ? missingFields(draft) : [];
 
   const addWorkflow = (event: React.FormEvent) => {
     event.preventDefault();
@@ -108,7 +96,7 @@ export function ForgePanel() {
 
   const addStep = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!draft || !workflow) return;
+    if (!draft || !workflow || draftMissing.length) return;
     const step = { ...draft, config: draft.type === "wait" ? { seconds: Number(draft.config.seconds) || 1 } : draft.config };
     void save(workflows.map((w, i) => (i === selected ? { ...w, steps: [...w.steps, step] } : w))).then(() => setDraft(null));
   };
@@ -119,7 +107,7 @@ export function ForgePanel() {
   const start = () =>
     task.run(async () => {
       const runId = await ipc.forgeRun(selected);
-      setRun({ runId, log: [], steps: {}, failedPid: {}, outcome: null });
+      beginRun(runId, selected);
     });
 
   return (
@@ -174,8 +162,8 @@ export function ForgePanel() {
 
             <ol className="m-0 grid list-none gap-1 p-0">
               {workflow.steps.map((step, i) => {
-                const state = run?.steps[i];
-                const pid = run?.failedPid[i];
+                const state = shown?.steps[i];
+                const pid = shown?.failedPid[i];
                 return (
                   <li key={i} className="flex items-center gap-2 rounded-md border border-bg-border bg-bg-surface px-3 py-2 text-sm">
                     <span className="w-5 text-right font-mono text-xs text-text-secondary">{i + 1}</span>
@@ -184,6 +172,7 @@ export function ForgePanel() {
                     {state === "running" ? <Badge tone="pending">running</Badge> : null}
                     {state === "done" ? <Badge tone="success">done</Badge> : null}
                     {state === "failed" ? <Badge tone="error">failed</Badge> : null}
+                    {state === "stopped" ? <Badge tone="info">stopped</Badge> : null}
                     {state === "failed" && pid ? (
                       <button type="button" className="text-xs text-text-link hover:underline" onClick={() => go("pulse", { tool: "pulse", pid })}>
                         Show in Pulse →
@@ -231,7 +220,13 @@ export function ForgePanel() {
                         multiline ? (
                           <Textarea id={id} rows={4} value={String(draft.config[key] ?? "")} onChange={(e) => setDraft({ ...draft, config: { ...draft.config, [key]: e.target.value } })} />
                         ) : (
-                          <Input id={id} value={String(draft.config[key] ?? "")} onChange={(e) => setDraft({ ...draft, config: { ...draft.config, [key]: e.target.value } })} />
+                          <Input
+                            id={id}
+                            required={REQUIRED[draft.type]?.includes(key)}
+                            aria-invalid={draftMissing.includes(key) && String(draft.config[key] ?? "") !== "" ? true : undefined}
+                            value={String(draft.config[key] ?? "")}
+                            onChange={(e) => setDraft({ ...draft, config: { ...draft.config, [key]: e.target.value } })}
+                          />
                         )
                       }
                     </Field>
@@ -253,7 +248,9 @@ export function ForgePanel() {
                     </div>
                   ) : null}
                   <div className="flex gap-2">
-                    <Button type="submit">Add step</Button>
+                    <Button type="submit" disabled={draftMissing.length > 0} title={draftMissing.length ? `Fill in: ${draftMissing.join(", ")}` : undefined}>
+                      Save step
+                    </Button>
                     <Button variant="ghost" onClick={() => setDraft(null)}>
                       Cancel
                     </Button>

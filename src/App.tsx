@@ -12,6 +12,7 @@ import { RelayPanel } from "./panels/relay/RelayPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { SwitchyardPanel } from "./panels/switchyard/SwitchyardPanel";
 import { startBus } from "./store/bus";
+import { startForge } from "./store/forge";
 import { startIntegrations, useLinks, useNav } from "./store/integrations";
 import { startTimeline } from "./store/timeline";
 import { startWorkspace, useWorkspace } from "./store/workspace";
@@ -33,6 +34,7 @@ function useServices(): void {
     const keep = (stop: () => void) => (cancelled ? stop() : stops.push(stop));
     void startBus().then(keep);
     void startIntegrations().then(keep);
+    void startForge().then(keep);
     void startWorkspace().then(keep);
     keep(startTimeline());
     return () => {

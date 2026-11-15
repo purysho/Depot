@@ -101,6 +101,7 @@ export const ipc = {
   forgeSave: (workflows: ForgeWorkflow[]) => invoke<{ saved: number }>("forge_save", { workflows }),
   forgeRun: (index: number) => invoke<string>("forge_run", { index }),
   forgeStop: (runId: string) => invoke<unknown>("forge_stop", { runId }),
+  forgeActive: () => invoke<string[]>("forge_active"),
 };
 
 /** Kept for the Settings panel. */

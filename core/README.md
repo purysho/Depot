@@ -18,14 +18,20 @@ One JSON object per line.
 
 | Direction | Shape |
 |---|---|
-| Depot → core, request | `{"id": 7, "method": "needle.search", "params": {...}}` |
+| Depot → core, request | `{"id": 7, "method": "needle.search", "params": {...}, "workspace": "api"}` |
 | core → Depot, reply | `{"id": 7, "result": ...}` |
-| core → Depot, error | `{"id": 7, "error": {"kind": "invalid" \| "not_found" \| "unknown_method" \| "failed", "message": "..."}}` |
-| core → Depot, bus event | `{"event": "needle.search_complete", "payload": {...}}` |
+| core → Depot, error | `{"id": 7, "error": {"kind": "invalid" \| "not_found" \| "unknown_method" \| "shutting_down" \| "failed", "message": "..."}}` |
+| core → Depot, bus event | `{"event": "needle.search_complete", "payload": {...}, "workspace": "api"}` |
 | core → Depot, UI stream | `{"stream": "forge.log", "params": {...}}` |
 
+`workspace` is the workspace the request was made in. Every event and stream
+the request causes carries it back, even if it arrives after you switched
+workspace, so Depot records it against the right one.
+
 Every `event` must be in `src/protocol/events.json` with origin `core`; a test
-checks this. Paths in params are absolute and come from Rust, which decides
+checks this. String fields that might hold credentials (URLs, error text,
+step labels) go through `redact.py` before they are published, because events
+are written to the timeline on disk. Paths in params are absolute and come from Rust, which decides
 the layout under `~/.depot/`.
 
 ## Methods
@@ -33,6 +39,7 @@ the layout under `~/.depot/`.
 | Method | Params | Publishes |
 |---|---|---|
 | `core.ping` | — | — |
+| `core.shutdown` | — | — (refuses new work, drops queued requests, stops every workflow and session (sessions in parallel), and replies only when all have stopped) |
 | `needle.build_index` | `roots`, `index_path` | `needle.index_started`, `needle.index_complete` |
 | `needle.search` | `index_path`, `query`, `limit?`, `ext?` | `needle.search_complete` |
 | `needle.index_info` | `index_path` | — |
@@ -42,12 +49,33 @@ the layout under `~/.depot/`.
 | `blackbox.scan` | `root`, `report_path` | `blackbox.scan_started`, `blackbox.scan_complete` / `blackbox.scan_failed` |
 | `blackbox.last_report` | `report_path` | — |
 | `forge.list`, `forge.save` | `store_dir`, (`workflows`) | — |
-| `forge.run` | `run_id`, `workflow_id`, `workflow` | `forge.run_started`, `forge.step_*`, `forge.run_finished`; stream `forge.log` |
+| `forge.validate` | `workflow`, `base_dir` | — (the checks `forge.run` makes, without running) |
+| `forge.run` | `run_id`, `workflow_id`, `workflow`, `base_dir` | `forge.run_started`, `forge.step_*`, `forge.run_finished`; stream `forge.log` |
 | `forge.stop` | `run_id` | — |
+| `forge.active` | — | — (run ids still running) |
 | `switchyard.state` | `state_path?` | — |
 | `switchyard.start_session` | `session_id`, `state_path?`, `runtime_path?` | `switchyard.*`; streams `switchyard.session_event`, `switchyard.log` |
 | `switchyard.stop_session` | `session_id` | `switchyard.session_stopped` |
 | `switchyard.status` | — | — |
+
+## Forge runs
+
+- **Required fields.** A step with a blank required field (a delete with no
+  path, a copy with no target) is refused before anything runs. Forge's engine
+  refuses blank paths too, and will not delete a drive root, the home folder,
+  or the folder it runs in.
+- **Where it runs.** `base_dir` is the workspace folder: a command with no
+  working folder runs there, and relative paths are relative to it. depot-core
+  never changes its own working folder; each step is resolved instead.
+- **Event labels** are a step's own name, or "command step 2": Forge's
+  automatic label is the command line, which can carry secrets.
+
+## Shutdown
+
+Depot sends `core.shutdown` and waits (up to 60 s) for the reply, then closes
+stdin. Closing stdin without it (Depot crashed) runs the same cleanup; so does
+SIGTERM. Once shutdown begins nothing new starts: workflow and session starts
+check the flag under the same lock the cleanup takes its list with.
 
 ## Running and testing
 

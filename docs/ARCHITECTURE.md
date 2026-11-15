@@ -67,9 +67,17 @@ trip, which is negligible beside the work itself (a Pulse snapshot or a scan).
 Depot depends on module-level APIs of the tools rather than on a published
 package interface; `core/tests/` is the contract that catches a break.
 
-**Upstream changes made for this.** Forge's runner gained an optional
-`on_event` callback (purysho/Forge `adcf9b7`) so Depot gets step results and
-the failing PID as data instead of parsing log text.
+**Upstream changes made for this.** Fixes found through Depot land in the
+tools themselves, so the standalone apps get them too:
+
+- Forge `adcf9b7`: an optional `on_event` callback, so Depot gets step results
+  and the failing PID as data instead of parsing log text.
+- Forge `ed01627`: blank paths are refused (a blank delete step used to delete
+  the contents of the folder Forge ran in), and deletes of a drive root, the
+  home folder or the running folder are refused.
+- Switchyard `759af30`: stopping a service waits for its whole process group,
+  so a program that ignores SIGTERM under its shell is killed instead of
+  orphaned.
 
 ## depot-core
 
@@ -85,8 +93,14 @@ the failing PID as data instead of parsing log text.
   prints goes to stderr, never into the protocol stream.
 - **Lifecycle.** Started on the first request (`core.rs`). If it dies, waiting
   requests fail with a `core` error and the next request starts a new one.
-  Closing its stdin (Depot quitting) stops running workflows and sessions,
-  then lets in-flight replies finish.
+- **Shutdown.** Quitting Depot sends `core.shutdown` and waits up to 60 s for
+  the reply, which comes only once every workflow and Switchyard service has
+  stopped (sessions stop in parallel; each service gets Switchyard's grace
+  period). A fixed cutoff would kill depot-core mid-cleanup and orphan
+  services. Once shutdown starts, queued requests are dropped and no workflow
+  or session can start. If Depot dies without asking, closing stdin or SIGTERM
+  runs the same cleanup, and the protocol writer drops messages once Depot's
+  pipe is gone so cleanup is never interrupted by a failed write.
 - **Which binary runs.** `$DEPOT_CORE` if set; in debug builds always
   `python -m depot_core` from `core/` (so a stale packaged sidecar can never
   shadow source edits); in release builds the bundled `depot-core` next to
@@ -195,8 +209,8 @@ interface BusEvent<T extends EventType> {
 
 ### Flow
 
-1. depot-core writes `{"event": …}` (most events); Rust code calls
-   `bus.publish` (`depot.*`, `blackbox.review_complete`); a panel calls
+1. depot-core writes `{"event": …, "workspace": …}` (most events); Rust code
+   calls `bus.publish` (`depot.*`, `blackbox.review_complete`); a panel calls
    `ipc.busPublish` (user actions).
 2. `bus.rs` refuses an unknown type, a publisher whose origin does not match
    the catalogue, a type the tool's manifest does not declare, or a payload
@@ -204,6 +218,12 @@ interface BusEvent<T extends EventType> {
    schema-checked at runtime.
 3. It stamps `id`, `ts` and `workspace`, appends the envelope to the timeline
    if the type is recorded, and emits one Tauri event, `depot://bus`.
+   `workspace` is the one the causing request was made in, not whichever is
+   open when the event arrives: every call to depot-core carries the open
+   workspace's name, and the events it causes carry it back. A scan started in
+   A that finishes after a switch to B is stamped A, is not written to B's
+   timeline, and is dropped by the frontend, which tracks the active workspace
+   from `depot.workspace_opened` in the same event stream.
 4. The frontend listens once (`src/store/bus.ts`) and fans out to local
    subscribers by type.
 

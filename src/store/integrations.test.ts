@@ -101,16 +101,6 @@ describe("timeline store", () => {
   });
 });
 
-describe("bus restart", () => {
-  it("can start again after being stopped (React development remounts)", async () => {
-    const { startBus } = await import("./bus");
-    const first = await startBus();
-    first();
-    const second = startBus();
-    expect(await second).not.toBe(first);
-  });
-});
-
 describe("timeline merging", () => {
   it("ignores an event it already has", () => {
     const e = { id: "dup-1", type: "needle.search_complete", source: "needle", workspace: "w", ts: "t", payload: { query: "q", result_count: 0, duration_ms: 1 } } as AnyBusEvent;

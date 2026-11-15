@@ -53,13 +53,13 @@ pub fn run() {
             let route_bus = Arc::clone(&bus);
             let route_app = handle.clone();
             let on_message = Arc::new(move |message: CoreMessage| match message {
-                CoreMessage::Event { event_type, payload } => {
-                    if let Err(err) = route_bus.publish(Origin::Core, &event_type, payload) {
+                CoreMessage::Event { event_type, payload, workspace } => {
+                    if let Err(err) = route_bus.publish_for(Origin::Core, &event_type, payload, workspace.as_deref()) {
                         eprintln!("depot: dropped event from depot-core: {err}");
                     }
                 }
-                CoreMessage::Stream { name, params } => {
-                    let _ = route_app.emit(STREAM_EVENT, json!({"name": name, "params": params}));
+                CoreMessage::Stream { name, params, workspace } => {
+                    let _ = route_app.emit(STREAM_EVENT, json!({"name": name, "params": params, "workspace": workspace}));
                 }
             });
             // A release build without its sidecar is broken; say so on stderr and in
@@ -111,6 +111,7 @@ pub fn run() {
             plugins::forge::forge_save,
             plugins::forge::forge_run,
             plugins::forge::forge_stop,
+            plugins::forge::forge_active,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Depot")
@@ -118,8 +119,9 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 let state = app.state::<AppState>();
                 state.bus.close_session("quit");
-                // Closing depot-core's stdin stops running workflows and sessions.
-                state.core.shutdown();
+                // Wait for depot-core to confirm every service and workflow has
+                // stopped. Generous: Switchyard gives each service a grace period.
+                state.core.shutdown_gracefully(std::time::Duration::from_secs(60));
             }
         });
 }
