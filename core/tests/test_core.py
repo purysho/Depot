@@ -535,8 +535,9 @@ class HostGoneTests(unittest.TestCase):
             params = {"session_id": session.id, "state_path": str(state_path), "runtime_path": str(Path(d) / "rt.json")}
             proc.stdin.write(json.dumps({"id": 1, "method": "switchyard.start_session", "params": params}) + "\n")
             proc.stdin.flush()
-            # Read everything depot-core says until the service reports in, so a
-            # failure shows Switchyard's events and the service's own output.
+            # Read what depot-core says until the service reports in, so a
+            # failure shows Switchyard's events. (Not after: closing stdout
+            # below would wait for a reader still blocked on it.)
             seen: list[dict] = []
             ready = threading.Event()
 
@@ -553,7 +554,13 @@ class HostGoneTests(unittest.TestCase):
             deadline = time.time() + 15
             while not pidfile.exists() and time.time() < deadline:
                 time.sleep(0.1)
-            self.assertTrue(pidfile.exists(), "the service never started; depot-core said:\n" + "\n".join(map(json.dumps, seen)))
+            if not pidfile.exists():
+                service_pid = next((m["payload"]["pid"] for m in seen if m.get("event") == "switchyard.service_started"), None)
+                alive = _alive(service_pid) if service_pid else None
+                self.fail(
+                    f"the service never wrote its pid (shell pid {service_pid}, alive: {alive}); depot-core said:\n"
+                    + "\n".join(map(json.dumps, seen))
+                )
             started = next((m for m in seen if m.get("id") == 1), None)
             self.assertTrue(started and started["result"]["started"], started)
             pid = int(pidfile.read_text())
