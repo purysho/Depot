@@ -83,6 +83,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   id and command text. Approval now includes the plugin's folder and the file
   its program resolves to, and a duplicate id disables every folder using it.
 
+### Fixed (from code review of c80d2e5)
+- A Forge command that read stdin consumed Depot's requests, which then never
+  got a reply. Forge gives commands an empty stdin (Forge `4647efd`), and
+  depot-core keeps its protocol pipes away from every program a tool starts.
+- Reopening Forge could bring back a run that finished while Depot was asking
+  which runs were active, leaving it "running". Finished runs are remembered
+  and not reattached.
+- A plugin folder without a valid manifest, named like a plugin's id, could
+  shadow that plugin. Such folders are listed as `folder:<name>`.
+
 ### Not yet
 - Third-party plugins with their own panel code or bus events (`native` and
   `sidecar` modes stay reserved for the built-in tools).

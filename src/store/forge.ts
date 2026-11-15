@@ -34,6 +34,16 @@ interface ForgeStore {
 
 const LOG_LINES = 500;
 
+// Runs seen finishing, so a forge.active reply that was already out of date
+// when it arrived (the run finished while the request was in flight) does
+// not bring a finished run back as "running".
+const finished = new Set<string>();
+const FINISHED_KEPT = 50;
+function rememberFinished(runId: string): void {
+  finished.add(runId);
+  if (finished.size > FINISHED_KEPT) finished.delete(finished.values().next().value as string);
+}
+
 export const useForgeRun = create<ForgeStore>((set, get) => ({
   run: null,
   begin: (runId, workflowIndex) => set({ run: { runId, workflowIndex, log: [], steps: {}, failedPid: {}, outcome: null } }),
@@ -52,7 +62,7 @@ export const useForgeRun = create<ForgeStore>((set, get) => ({
     if (get().run) return;
     try {
       const [runId] = await ipc.forgeActive();
-      if (runId && !get().run) get().begin(runId, null);
+      if (runId && !get().run && !finished.has(runId)) get().begin(runId, null);
     } catch {
       // No workspace, or outside Depot.
     }
@@ -73,12 +83,13 @@ export function startForge(): Promise<() => void> {
       update(p.run_id, (r) => ({ steps: { ...r.steps, [p.step_index]: "failed" }, failedPid: { ...r.failedPid, [p.step_index]: p.pid } })),
     ),
     // A step interrupted by Stop gets no event of its own: settle it here.
-    subscribe("forge.run_finished", ({ payload: p }) =>
+    subscribe("forge.run_finished", ({ payload: p }) => {
+      rememberFinished(p.run_id);
       update(p.run_id, (r) => ({
         outcome: p.outcome,
         steps: Object.fromEntries(Object.entries(r.steps).map(([i, s]) => [i, s === "running" ? "stopped" : s])),
-      })),
-    ),
+      }));
+    }),
     // A run belongs to the workspace it started in; a new workspace starts clean.
     subscribe("depot.workspace_opened", () => useForgeRun.setState({ run: null })),
   ];

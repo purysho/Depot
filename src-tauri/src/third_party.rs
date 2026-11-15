@@ -224,14 +224,18 @@ pub fn discover(home: &Path, approved: &BTreeMap<String, Approval>, depot_versio
     let mut plugins: Vec<(PluginInfo, bool)> = folders
         .into_iter()
         .map(|folder| {
-            let fallback_id = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let folder_name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // A folder whose manifest could not be read has no id of its own.
+            // It is listed under `folder:<name>`, which no valid id can equal
+            // (ids have no `:`), so it can never be taken for a real plugin.
+            let fallback_id = format!("folder:{folder_name}");
             let parsed = fs::read_to_string(folder.join(MANIFEST))
                 .map_err(|_| format!("no {MANIFEST} in this folder"))
                 .and_then(|text| serde_json::from_str::<Manifest>(&text).map_err(|e| format!("{MANIFEST}: {e}")));
             match parsed {
                 Err(error) => (PluginInfo {
-                    id: fallback_id.clone(),
-                    name: fallback_id,
+                    id: fallback_id,
+                    name: folder_name,
                     version: String::new(),
                     description: String::new(),
                     label: String::new(),
@@ -552,5 +556,23 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
         // The shell syntax arrives as literal text: it was never run.
         assert_eq!(fs::read_to_string(&out).unwrap(), "api\n$(whoami); echo hi\n");
+    }
+
+    #[test]
+    fn a_broken_folder_named_like_a_plugin_does_not_shadow_it() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(plugins_dir(dir.path()).join("notes")).unwrap(); // no manifest
+        write(dir.path(), "z-notes", manifest("notes", "./bin/tool", &[]));
+        tool(dir.path(), "z-notes");
+        let mut approved = BTreeMap::new();
+        approve(dir.path(), &mut approved);
+        let found = discover(dir.path(), &approved, "0.1.0");
+        let broken = found.iter().find(|p| p.folder.ends_with("notes") && !p.folder.ends_with("z-notes")).unwrap();
+        assert_eq!(broken.id, "folder:notes");
+        assert_eq!(broken.name, "notes");
+        // The first entry with id "notes", which is what launching looks up, is the valid one.
+        let notes = found.iter().find(|p| p.id == "notes").unwrap();
+        assert!(notes.folder.ends_with("z-notes"));
+        assert!(notes.enabled);
     }
 }

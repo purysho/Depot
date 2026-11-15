@@ -100,6 +100,20 @@ describe("forge run store", () => {
     stop();
   });
 
+  it("does not reattach to a run that finished while forge_active was in flight", async () => {
+    const { startForge, useForgeRun } = await import("./forge");
+    const stop = await startForge();
+    dispatch(event("w", "depot.workspace_opened", "depot"));
+    ipcMock.forgeActive.mockImplementationOnce(async () => {
+      // The run finishes after depot-core took its snapshot, before the reply lands.
+      dispatch({ id: "f2", type: "forge.run_finished", source: "forge", workspace: "w", ts: "", payload: { run_id: "late", outcome: "completed", failed_steps: 0, duration_ms: 1 } } as AnyBusEvent);
+      return ["late"];
+    });
+    await useForgeRun.getState().reattach();
+    expect(useForgeRun.getState().run).toBeNull();
+    stop();
+  });
+
   it("forgets a run that depot-core refused to start", async () => {
     const { useForgeRun } = await import("./forge");
     ipcMock.forgeRun.mockRejectedValueOnce({ kind: "invalid", message: "path is empty" });

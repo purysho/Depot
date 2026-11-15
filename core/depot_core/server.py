@@ -195,10 +195,40 @@ def stop_everything(server: Server) -> None:
         w.join()
 
 
+def take_protocol_streams() -> tuple[IO[str], IO[str]]:
+    """Move the protocol off file descriptors 0 and 1, which every child
+    process inherits unless told otherwise.
+
+    The tools start programs (Switchyard services, Forge commands, Pulse's
+    `ps`); one that reads stdin would take Depot's requests, and one that
+    writes to stdout would corrupt the replies. The protocol now uses private
+    copies that children do not inherit (Python's dup is non-inheritable), fd 0
+    becomes the null device and fd 1 points at stderr. Tools also pass stdin
+    explicitly; this covers whatever they miss.
+    """
+    sys.stdout.flush()
+    protocol_in = os.fdopen(os.dup(0), "r", encoding="utf-8", errors="replace")
+    protocol_out = os.fdopen(os.dup(1), "w", encoding="utf-8", buffering=1)
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+    os.dup2(2, 1)
+    if sys.platform == "win32":
+        # Children started without explicit handles get the process's
+        # standard handles; point those at the new fds 0 and 1 as well.
+        import ctypes
+        import msvcrt
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetStdHandle(-10, msvcrt.get_osfhandle(0))  # STD_INPUT_HANDLE
+        kernel32.SetStdHandle(-11, msvcrt.get_osfhandle(1))  # STD_OUTPUT_HANDLE
+    sys.stdin = open(os.devnull, encoding="utf-8")
+    sys.stdout = sys.stderr  # anything a tool core prints goes to stderr
+    return protocol_in, protocol_out
+
+
 def main() -> None:
-    # Keep the protocol stream for ourselves; anything a tool core prints goes to stderr.
-    protocol_out = sys.stdout
-    sys.stdout = sys.stderr
+    protocol_in, protocol_out = take_protocol_streams()
     server = build_server(protocol_out)
 
     def on_terminate(_signum: int, _frame: object) -> None:
@@ -208,7 +238,7 @@ def main() -> None:
     # Asked to stop by the OS (logout, `kill`): clean up the same way.
     signal.signal(signal.SIGTERM, on_terminate)
     try:
-        for line in sys.stdin:
+        for line in protocol_in:
             server.handle_line(line)
     finally:
         # stdin closed: Depot quit, crashed or restarted us.

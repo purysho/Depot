@@ -635,6 +635,65 @@ class EntryPointTests(unittest.TestCase):
         self.assertEqual(reply["id"], 1)
         self.assertIn("version", reply["result"])
 
+    def test_child_processes_cannot_read_requests_or_write_replies(self):
+        """A child started with no redirection gets the null device as stdin
+        and stderr as stdout, never depot-core's protocol pipes."""
+        script = (
+            "import subprocess, sys\n"
+            "from depot_core.server import take_protocol_streams\n"
+            "protocol_in, protocol_out = take_protocol_streams()\n"
+            "child = 'import sys; print(\"child read \" + repr(sys.stdin.read()))'\n"
+            "subprocess.run([sys.executable, '-c', child], timeout=30)\n"
+            "protocol_out.write('reply: ' + protocol_in.readline())\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            input='{"id": 101, "method": "core.ping"}\n',
+            capture_output=True, text=True, cwd=CORE, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The request reached depot-core, not the child…
+        self.assertEqual(proc.stdout, 'reply: {"id": 101, "method": "core.ping"}\n')
+        # …and the child's output went to stderr.
+        self.assertIn("child read ''", proc.stderr)
+
+    def test_a_workflow_reading_stdin_does_not_swallow_requests(self):
+        """The reviewer's case, through the real sidecar: a Forge command that
+        reads stdin runs while Depot sends core.ping; the ping is answered."""
+        with tempfile.TemporaryDirectory() as d:
+            command = f'"{sys.executable}" -c "import sys; sys.stdin.read()"'
+            run = {"id": 1, "method": "forge.run", "params": {"run_id": "r", "workflow_id": "w", "base_dir": d,
+                   "workflow": {"name": "t", "steps": [{"type": "command", "config": {"command": command}}]}}}
+            proc = subprocess.Popen([sys.executable, "-m", "depot_core"], cwd=CORE, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            replies: dict[int, dict] = {}
+            both = threading.Event()
+
+            def read() -> None:
+                for line in proc.stdout:
+                    message = json.loads(line)
+                    if "id" in message:
+                        replies[message["id"]] = message
+                    if len(replies) == 2:
+                        both.set()
+                        return
+
+            threading.Thread(target=read, daemon=True).start()
+            try:
+                proc.stdin.write(json.dumps(run) + "\n")
+                proc.stdin.flush()
+                time.sleep(1.0)  # the command is now running, reading stdin if it can
+                proc.stdin.write('{"id": 101, "method": "core.ping"}\n')
+                proc.stdin.flush()
+                both.wait(30)
+            finally:
+                proc.stdin.close()
+                proc.kill()  # if the command swallowed the ping, it is still waiting
+                proc.wait(timeout=30)
+            self.assertIn(101, replies, "core.ping was never answered: the workflow command read it")
+            self.assertIn("result", replies[101])
+            self.assertEqual(replies[1]["result"]["outcome"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

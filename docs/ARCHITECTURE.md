@@ -84,6 +84,8 @@ tools themselves, so the standalone apps get them too:
   exclusive, so a stop during start cannot miss the service being launched.
 - Forge `9e7eb0a`: Stop waits for the command's whole process group, and a
   stop requested before a run starts holds until `reset()`.
+- Forge `4647efd`: commands get an empty stdin instead of inheriting
+  depot-core's, which carries Depot's requests.
 
 ## depot-core
 

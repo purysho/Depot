@@ -35,7 +35,8 @@ What runs, and with what reach:
 
 - **depot-core**, a sidecar bundled with Depot, runs the six tools' own
   Python code. Depot starts it with a fixed command and talks to it over
-  stdin/stdout; it opens no ports.
+  stdin/stdout; it opens no ports. Programs the tools start never get those
+  pipes: their stdin is empty and their stdout is not Depot's.
 - **Relay** sends requests only to the URL you enter. As in standalone Relay,
   any URL scheme Python's `urllib` accepts works, including `file://`, which
   reads a local file you can already read.

@@ -14,7 +14,12 @@ core/depot_core/
 
 ## Protocol
 
-One JSON object per line.
+One JSON object per line, on depot-core's stdin and stdout. At start-up
+depot-core moves the protocol onto private copies of those pipes, which child
+processes do not inherit, and points fd 0 at the null device and fd 1 at
+stderr (`take_protocol_streams` in `server.py`). A program a tool starts
+cannot read Depot's requests or write into its replies, even if the tool
+forgets to redirect it.
 
 | Direction | Shape |
 |---|---|
