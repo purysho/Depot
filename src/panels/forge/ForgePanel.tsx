@@ -60,7 +60,7 @@ export function ForgePanel() {
   const [note, setNote] = useState<string | null>(null);
   // Kept in a store, not here: the run outlives this panel when you switch tools.
   const run = useForgeRun((s) => s.run);
-  const beginRun = useForgeRun((s) => s.begin);
+  const startRun = useForgeRun((s) => s.start);
   const reattach = useForgeRun((s) => s.reattach);
   const task = useTask();
 
@@ -142,8 +142,7 @@ export function ForgePanel() {
 
   const start = () =>
     task.run(async () => {
-      const runId = await ipc.forgeRun(selected);
-      beginRun(runId, selected);
+      await startRun(selected);
     });
 
   return (

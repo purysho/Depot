@@ -41,6 +41,21 @@ pub async fn blackbox_last_report(state: State<'_, AppState>) -> Result<Value> {
 #[derive(Default)]
 pub struct OcrRun(Arc<Mutex<Option<Child>>>);
 
+impl OcrRun {
+    /// Stop the running review, with every process it started. Returns
+    /// whether one was running. Used by Cancel and when Depot quits.
+    pub fn stop(&self) -> bool {
+        let child = self.0.lock().expect("ocr lock").take();
+        match child {
+            Some(mut c) => {
+                kill_tree(&mut c);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct OcrStatus {
     pub available: bool,
@@ -273,7 +288,10 @@ pub async fn ocr_status() -> Result<OcrStatus> {
 pub async fn ocr_review(app: AppHandle, state: State<'_, AppState>, target: ReviewTarget) -> Result<Value> {
     let ocr = find_ocr()
         .ok_or_else(|| DepotError::new(ErrorKind::Unavailable, "Open Code Review (ocr) is not installed on PATH"))?;
-    let repo = state.current()?.blackbox_repo();
+    let ctx = state.current()?;
+    // Captured now: the review belongs to this workspace even if another one
+    // is open by the time it finishes.
+    let (repo, workspace) = (ctx.blackbox_repo(), ctx.name);
     let args = review_args(&repo, &target)?;
     let slot = Arc::clone(&state.ocr.0);
     {
@@ -291,9 +309,13 @@ pub async fn ocr_review(app: AppHandle, state: State<'_, AppState>, target: Revi
             .map_err(|e| DepotError::core(format!("Could not start ocr: {e}")))?;
         let stderr = child.stderr.take().expect("piped");
         let app = app.clone();
+        let progress_workspace = workspace.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(std::result::Result::ok) {
-                let _ = app.emit("depot://stream", json!({"name": "blackbox.ocr_progress", "params": {"line": line}}));
+                let _ = app.emit(
+                    crate::STREAM_EVENT,
+                    json!({"name": "blackbox.ocr_progress", "params": {"line": line}, "workspace": progress_workspace}),
+                );
             }
         });
         *guard = Some(child);
@@ -324,7 +346,7 @@ pub async fn ocr_review(app: AppHandle, state: State<'_, AppState>, target: Revi
     let output: Value = serde_json::from_str(stdout.trim())
         .map_err(|_| DepotError::core("ocr did not return JSON. Run `ocr review --format json` in a terminal to see why."))?;
     let review = map_review(&output);
-    state.bus.publish(
+    state.bus.publish_for(
         Origin::Backend,
         "blackbox.review_complete",
         json!({
@@ -334,20 +356,14 @@ pub async fn ocr_review(app: AppHandle, state: State<'_, AppState>, target: Revi
             "comments": review["findings"].as_array().map_or(0, Vec::len),
             "by_severity": review["by_severity"],
         }),
+        Some(&workspace),
     )?;
     Ok(review)
 }
 
 #[tauri::command]
 pub async fn ocr_cancel(state: State<'_, AppState>) -> Result<bool> {
-    let child = state.ocr.0.lock().expect("ocr lock").take();
-    Ok(match child {
-        Some(mut c) => {
-            kill_tree(&mut c);
-            true
-        }
-        None => false,
-    })
+    Ok(state.ocr.stop())
 }
 
 #[cfg(test)]
@@ -428,20 +444,24 @@ mod tests {
         assert!(!is_launcher(&native));
     }
 
-    /// The review's grandchildren die with it (the npm launcher case).
+    /// Cancel and quitting Depot both stop the review with OcrRun::stop, and
+    /// its grandchildren die with it (the npm launcher case).
     #[cfg(unix)]
     #[test]
-    fn cancel_kills_the_whole_tree() {
+    fn stopping_a_review_kills_the_whole_tree() {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("grandchild");
         let script = format!("sleep 60 & echo $! > {}; wait", pidfile.display());
-        let mut child = own_group(&mut Command::new("sh")).args(["-c", &script]).spawn().unwrap();
+        let child = own_group(&mut Command::new("sh")).args(["-c", &script]).spawn().unwrap();
+        let run = OcrRun::default();
+        *run.0.lock().unwrap() = Some(child);
         let deadline = Instant::now() + Duration::from_secs(5);
         while !pidfile.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
         let grandchild = std::fs::read_to_string(&pidfile).unwrap().trim().to_string();
-        kill_tree(&mut child);
+        assert!(run.stop());
+        assert!(!run.stop(), "nothing left to stop");
         std::thread::sleep(Duration::from_millis(200));
         // A killed process can linger as a zombie when nothing reaps it (as in
         // containers whose PID 1 does not); a zombie is dead for our purposes.

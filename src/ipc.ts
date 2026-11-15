@@ -53,6 +53,8 @@ export const events = {
 export interface StreamMessage {
   name: string;
   params: Record<string, unknown>;
+  /** The workspace whose work produced it, when known. */
+  workspace?: string | null;
 }
 
 export const ipc = {
@@ -111,7 +113,8 @@ export const ipc = {
   // plugins/forge.rs
   forgeList: () => invoke<ForgeWorkflow[]>("forge_list"),
   forgeSave: (workflows: ForgeWorkflow[]) => invoke<{ saved: number }>("forge_save", { workflows }),
-  forgeRun: (index: number) => invoke<string>("forge_run", { index }),
+  /** The caller picks `runId` and registers the run first, so no early event is missed. */
+  forgeRun: (index: number, runId: string) => invoke<string>("forge_run", { index, runId }),
   forgeStop: (runId: string) => invoke<unknown>("forge_stop", { runId }),
   forgeActive: () => invoke<string[]>("forge_active"),
   /** Opens a native file dialog; null when cancelled. */

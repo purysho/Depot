@@ -73,6 +73,9 @@ def event_label(step: dict[str, Any], index: int) -> str:
     return redact.text(name) if name else f"{step.get('type', 'step')} step {index + 1}"
 
 _runs: dict[str, WorkflowRunner] = {}
+# The workspace each run was started in, so a panel reopened in another
+# workspace does not adopt it.
+_owners: dict[str, str | None] = {}
 _lock = threading.Lock()
 
 
@@ -182,6 +185,7 @@ def run(params: dict[str, Any], ctx: Context) -> dict[str, Any]:
         if run_id in _runs:
             raise invalid(f"run {run_id} is already running")
         _runs[run_id] = runner
+        _owners[run_id] = ctx.workspace
 
     finished: dict[str, Any] = {"outcome": "failed", "failed_steps": 0}
 
@@ -198,6 +202,7 @@ def run(params: dict[str, Any], ctx: Context) -> dict[str, Any]:
     finally:
         with _lock:
             _runs.pop(run_id, None)
+            _owners.pop(run_id, None)
         duration_ms = round((time.monotonic() - started) * 1000)
         ctx.event(
             "forge.run_finished",
@@ -216,10 +221,11 @@ def stop(params: dict[str, Any], _ctx: Context) -> dict[str, Any]:
     return {"stopping": run_id}
 
 
-def active(_params: dict[str, Any], _ctx: Context) -> list[str]:
-    """Run ids still running, so the panel can reattach after being reopened."""
+def active(_params: dict[str, Any], ctx: Context) -> list[str]:
+    """Run ids still running in the requester's workspace, so its panel can
+    reattach after being reopened. Another workspace's runs are not listed."""
     with _lock:
-        return list(_runs)
+        return [run_id for run_id in _runs if _owners.get(run_id) == ctx.workspace]
 
 
 def stop_all(_server: Server, wait: float = 15.0) -> None:

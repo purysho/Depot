@@ -54,9 +54,9 @@ the layout under `~/.depot/`.
 | `forge.list`, `forge.save` | `store_dir`, (`workflows`) | — |
 | `forge.import`, `forge.export` | `store_dir`, `path`, (`index`) | — (`.forge.json` files; Rust picks `path` with a native dialog) |
 | `forge.validate` | `workflow`, `base_dir` | — (the checks `forge.run` makes, without running) |
-| `forge.run` | `run_id`, `workflow_id`, `workflow`, `base_dir` | `forge.run_started`, `forge.step_*`, `forge.run_finished`; stream `forge.log` |
+| `forge.run` | `run_id` (chosen by the panel, before it calls), `workflow_id`, `workflow`, `base_dir` | `forge.run_started`, `forge.step_*`, `forge.run_finished`; stream `forge.log` |
 | `forge.stop` | `run_id` | — |
-| `forge.active` | — | — (run ids still running) |
+| `forge.active` | — | — (run ids still running in the requesting workspace) |
 | `switchyard.state` | `state_path?` | — |
 | `switchyard.start_session` | `session_id`, `state_path?`, `runtime_path?` | `switchyard.*`; streams `switchyard.session_event`, `switchyard.log` |
 | `switchyard.stop_session` | `session_id` | `switchyard.session_stopped` |

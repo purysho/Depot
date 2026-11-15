@@ -146,7 +146,12 @@ def start_session(params: dict[str, Any], ctx: Context) -> dict[str, Any]:
         )
         box["controller"] = controller
         _sessions[session.id] = box
-    controller.start()
+        # Started under the lock: stop_all collects sessions under it, so it
+        # either sees this session already started or never sees it at all
+        # (and shutting_down above refuses it). start() only spawns Switchyard's
+        # worker thread, so the lock is held briefly; Switchyard makes a stop
+        # during the worker's launches wait for them (Switchyard 227b70c).
+        controller.start()
     return {"started": True, "checks": checks_out}
 
 

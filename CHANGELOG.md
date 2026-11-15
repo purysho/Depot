@@ -62,6 +62,27 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   npm-installed review could leave the native process running. Depot now runs
   the native binary and stops the whole process tree.
 
+### Fixed (from code review of 0779633)
+- Stopping a Forge workflow could report "stopped" while its command ran on
+  (a child that ignored SIGTERM after its shell exited). Forge now waits for
+  the whole process group (Forge `9e7eb0a`).
+- A Forge run or Switchyard session could start after shutdown had finished
+  stopping everything. Forge keeps a stop that arrives before a run starts
+  (Forge `9e7eb0a`); Switchyard sessions are started under the lock shutdown
+  collects them with, and Switchyard makes launching and stopping exclusive
+  (Switchyard `227b70c`).
+- Work that finished after a workspace switch was recorded in no timeline. It
+  now goes to the last timeline of the workspace it belongs to.
+- Forge could reattach to another workspace's run, and a workflow that
+  finished before `forge_run` returned stayed "running" forever. Runs are
+  listed per workspace, and the panel registers a run before starting it.
+- The AI review's completion and progress were attributed to whichever
+  workspace was open when it finished; they now belong to the one it started
+  in. Quitting Depot also stops a review in progress.
+- A plugin folder could inherit another folder's approval by using the same
+  id and command text. Approval now includes the plugin's folder and the file
+  its program resolves to, and a duplicate id disables every folder using it.
+
 ### Not yet
 - Third-party plugins with their own panel code or bus events (`native` and
   `sidecar` modes stay reserved for the built-in tools).

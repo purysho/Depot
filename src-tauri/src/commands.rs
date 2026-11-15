@@ -114,12 +114,10 @@ pub fn plugins_set_enabled(state: State<'_, AppState>, id: String, enabled: bool
     let found = crate::third_party::discover(&state.home, &settings.approved_plugins, env!("CARGO_PKG_VERSION"));
     let plugin = found.iter().find(|p| p.id == id).ok_or_else(|| DepotError::not_found(format!("No plugin {id}")))?;
     if enabled {
-        if let Some(error) = &plugin.error {
-            return Err(DepotError::invalid(format!("{} cannot be enabled: {error}", plugin.name)));
-        }
-        settings
-            .approved_plugins
-            .insert(id, crate::third_party::Approval { program: plugin.program.clone(), args: plugin.args.clone() });
+        let approval = plugin.approval().ok_or_else(|| {
+            DepotError::invalid(format!("{} cannot be enabled: {}", plugin.name, plugin.error.as_deref().unwrap_or("its program was not found")))
+        })?;
+        settings.approved_plugins.insert(id, approval);
     } else {
         settings.approved_plugins.remove(&id);
     }

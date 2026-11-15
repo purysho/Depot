@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -303,6 +304,23 @@ class ForgeSafetyTests(unittest.TestCase):
             self.assertEqual(Path((Path(d) / "where.txt").read_text()).resolve(), Path(d).resolve())
             self.assertEqual((Path(d) / "out" / "note.txt").read_text(), "hi")
 
+    def test_active_lists_only_the_requesting_workspaces_runs(self):
+        with tempfile.TemporaryDirectory() as d:
+            h = Harness()
+            steps = [{"type": "wait", "config": {"seconds": 30}}]
+            params = {"run_id": "inA", "workflow_id": "w", "base_dir": d, "workflow": {"name": "t", "steps": steps}}
+            worker = threading.Thread(target=lambda: Harness().call("forge.run", params, workspace="A"))
+            worker.start()
+            try:
+                deadline = time.time() + 5
+                while time.time() < deadline and not h.call("forge.active", {}, workspace="A")[0]["result"]:
+                    time.sleep(0.05)
+                self.assertEqual(h.call("forge.active", {}, workspace="A")[0]["result"], ["inA"])
+                self.assertEqual(h.call("forge.active", {}, workspace="B")[0]["result"], [])
+            finally:
+                h.call("forge.stop", {"run_id": "inA"})
+                worker.join(10)
+
     def test_event_labels_never_carry_the_command_line(self):
         with tempfile.TemporaryDirectory() as d:
             secret = "s3cr3t-value"
@@ -388,6 +406,26 @@ class ShutdownTests(unittest.TestCase):
             )
             self.assertEqual(reply["error"]["kind"], "shutting_down")
             self.assertFalse(marker.exists())
+
+    def test_a_workflow_stopped_before_its_first_step_does_nothing(self):
+        """Shutdown landing after forge.run registered its runner but before
+        the runner began: the stop must hold (Forge a05433c), not be cleared."""
+        from depot_core.tools import forge as forge_tool
+
+        with tempfile.TemporaryDirectory() as d:
+            h = Harness()
+            real_run = forge_tool.WorkflowRunner.run
+
+            def run_after_shutdown(runner, workflow):
+                forge_tool.stop_all(h.server, wait=0)  # shutdown wins the race
+                return real_run(runner, workflow)
+
+            out = Path(d) / "written.txt"
+            params = {"run_id": "r", "workflow_id": "w", "base_dir": d, "workflow": {"name": "t", "steps": [{"type": "write", "config": {"path": str(out), "content": "x"}}]}}
+            with mock.patch.object(forge_tool.WorkflowRunner, "run", run_after_shutdown):
+                reply, _, _ = h.call("forge.run", params)
+            self.assertEqual(reply["result"]["outcome"], "stopped", reply)
+            self.assertFalse(out.exists(), "a step ran after shutdown stopped the workflow")
 
     def test_queued_requests_are_dropped_not_run(self):
         """A request still waiting in the queue when shutdown begins never runs."""

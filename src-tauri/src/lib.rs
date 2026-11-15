@@ -133,6 +133,8 @@ pub fn run() {
             if let RunEvent::Exit = event {
                 let state = app.state::<AppState>();
                 state.bus.close_session("quit");
+                // An AI review runs outside depot-core: stop it here.
+                state.ocr.stop();
                 // Wait for depot-core to confirm every service and workflow has
                 // stopped. Generous: Switchyard gives each service a grace period.
                 state.core.shutdown_gracefully(std::time::Duration::from_secs(60));

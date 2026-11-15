@@ -4,6 +4,7 @@ import { Badge, Button, Card, EmptyState, ErrorNote, ExternalLink, Field, Input,
 import { cn } from "../../design/cn";
 import { events, ipc, listen, type StreamMessage } from "../../ipc";
 import { useWorkspace } from "../../store/workspace";
+import { isStreamForActiveWorkspace } from "../../store/bus";
 import type { BlackboxReport, Finding, OcrReview, OcrStatus, ReviewTarget, Severity } from "../../types/tools";
 import { NoWorkspace } from "../shared/NoWorkspace";
 import { useTask } from "../shared/useTask";
@@ -180,7 +181,7 @@ function OcrSection({ status, onReview }: { status: OcrStatus | null; onReview: 
 
   useEffect(() => {
     const off = listen<StreamMessage>(events.stream, (m) => {
-      if (m.name === "blackbox.ocr_progress") setProgress(String(m.params.line));
+      if (m.name === "blackbox.ocr_progress" && isStreamForActiveWorkspace(m)) setProgress(String(m.params.line));
     });
     return () => void off.then((f) => f());
   }, []);

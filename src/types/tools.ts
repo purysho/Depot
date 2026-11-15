@@ -219,6 +219,8 @@ export interface PluginInfo {
   color: string;
   folder: string;
   program: string;
+  /** Where `program` resolved to; approval is tied to this file and the plugin's folder. */
+  executable: string | null;
   args: string[];
   workspace_scoped: boolean;
   enabled: boolean;

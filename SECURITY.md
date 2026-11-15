@@ -65,9 +65,10 @@ What runs, and with what reach:
   workspace's indexed folders (checked after resolving links) and is not a
   program or script; those are revealed in the file manager instead.
 - **Third-party plugins** (`~/.depot/plugins/`) run nothing until you enable
-  them in Settings, which shows the exact program and arguments. That
-  approval is stored; if the manifest's program or arguments change, the
-  plugin stops running until you approve it again. Rust starts the program
+  them in Settings, which shows the exact program and arguments and the file
+  it runs. That approval is stored with the plugin's folder and that file; if
+  any of them changes, the plugin stops running until you approve it again,
+  and a second folder claiming the same id disables both. Rust starts the program
   with an argument list and no shell, and the only substitutions are the
   workspace folder and name. Plugins cannot load code into Depot or use the
   event bus. A plugin you enable runs with your permissions, like any program

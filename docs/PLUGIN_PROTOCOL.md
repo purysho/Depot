@@ -104,8 +104,10 @@ Plugins**, including any whose manifest is wrong and why.
 Rules (checked by `src-tauri/src/third_party.rs`):
 
 - **Nothing runs until you enable it.** Enabling records the exact program
-  and arguments shown. If the manifest later changes either, the plugin is
-  marked *Changed — review* and does not run until you enable it again.
+  and arguments shown, the plugin's folder, and the file the program
+  resolved to (shown as *Runs …* in Settings). If any of these changes, the
+  plugin is marked *Changed — review* and does not run until you enable it
+  again. A program that cannot be found is reported and cannot be enabled.
 - `embed.mode` must be `handoff`. `native` and `sidecar` would run the
   plugin's code inside Depot with all of Depot's permissions, so they are
   reserved for the built-in tools.
@@ -122,7 +124,8 @@ Rules (checked by `src-tauri/src/third_party.rs`):
   plugins cannot use the bus yet. Depot records each launch itself as
   `depot.plugin_launched`.
 - `id` must not be a built-in tool's (`switchyard`, `needle`, `relay`,
-  `pulse`, `blackbox`, `forge`, `depot`) or another plugin's.
+  `pulse`, `blackbox`, `forge`, `depot`). If two folders use the same id,
+  neither runs until one is removed.
 - `panel.icon` must be one of: `BookOpen`, `Bot`, `Box`, `Bug`, `ChartLine`,
   `Cloud`, `Container`, `Cpu`, `Database`, `FileText`, `Gauge`, `GitBranch`,
   `Globe`, `Layers`, `Mail`, `Network`, `Notebook`, `Package`, `Puzzle`,

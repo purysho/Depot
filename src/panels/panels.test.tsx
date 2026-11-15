@@ -62,6 +62,7 @@ const notes: PluginInfo = {
   color: "#6e7681",
   folder: "/home/me/.depot/plugins/notes",
   program: "notes-app",
+  executable: "/usr/bin/notes-app",
   args: ["--dir", "{workspace.root}", "two words"],
   workspace_scoped: true,
   enabled: false,
@@ -330,6 +331,7 @@ describe("integration UI", () => {
     ipcMock.pluginsSetEnabled.mockResolvedValueOnce([{ ...notes, enabled: true }, broken]);
     render(<PluginSettings />);
     expect(await screen.findByText('notes-app --dir {workspace.root} "two words"')).toBeInTheDocument();
+    expect(screen.getByText("Runs /usr/bin/notes-app")).toBeInTheDocument();
     expect(screen.getByText("id relay belongs to a built-in tool")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Enable broken" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enable Notes" }));

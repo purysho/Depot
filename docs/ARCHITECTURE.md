@@ -78,6 +78,12 @@ tools themselves, so the standalone apps get them too:
 - Switchyard `759af30`: stopping a service waits for its whole process group,
   so a program that ignores SIGTERM under its shell is killed instead of
   orphaned.
+- Switchyard `5b7ce28`: services get an empty stdin instead of inheriting
+  depot-core's, which carries Depot's requests.
+- Switchyard `227b70c`: launching a service and stopping its session are
+  exclusive, so a stop during start cannot miss the service being launched.
+- Forge `9e7eb0a`: Stop waits for the command's whole process group, and a
+  stop requested before a run starts holds until `reset()`.
 
 ## depot-core
 

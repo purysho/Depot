@@ -21,14 +21,18 @@ pub async fn forge_save(state: State<'_, AppState>, workflows: Value) -> Result<
 /// Start the workflow at `index` and return its run id at once. Progress
 /// arrives as forge.* bus events and `forge.log` stream lines.
 #[tauri::command]
-pub async fn forge_run(state: State<'_, AppState>, index: usize) -> Result<String> {
+pub async fn forge_run(state: State<'_, AppState>, index: usize, run_id: String) -> Result<String> {
+    // The panel picks the id and registers the run before calling, so events
+    // from a workflow that finishes at once are not lost (store/forge.ts).
+    if run_id.len() != 32 || !run_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(DepotError::invalid("run_id must be 32 hex digits"));
+    }
     let ctx = state.current()?;
     let workflows = state.core("forge.list", json!({"store_dir": state.tool_dir("forge")?})).await?;
     let workflow = workflows
         .get(index)
         .cloned()
         .ok_or_else(|| DepotError::not_found("That workflow no longer exists"))?;
-    let run_id = uuid::Uuid::new_v4().simple().to_string();
     // base_dir: commands without a working folder, and relative paths, run in
     // the workspace rather than wherever depot-core was started.
     let params = json!({"run_id": run_id, "workflow_id": format!("{index}"), "workflow": workflow, "base_dir": ctx.root});

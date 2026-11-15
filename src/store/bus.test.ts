@@ -3,7 +3,9 @@ import type { AnyBusEvent } from "../types/events";
 
 // A fake Tauri listener that counts how many are active.
 const listeners = vi.hoisted(() => ({ active: 0, started: 0 }));
+const ipcMock = vi.hoisted(() => ({ forgeRun: vi.fn<(index: number, runId: string) => Promise<string>>(), forgeActive: vi.fn() }));
 vi.mock("../ipc", () => ({
+  ipc: ipcMock,
   events: { bus: "depot://bus" },
   listen: () => {
     listeners.started += 1;
@@ -13,7 +15,7 @@ vi.mock("../ipc", () => ({
   },
 }));
 
-import { dispatch, isForActiveWorkspace, startBus, subscribe } from "./bus";
+import { dispatch, isForActiveWorkspace, isStreamForActiveWorkspace, startBus, subscribe } from "./bus";
 
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
@@ -81,5 +83,36 @@ describe("forge run store", () => {
     expect(useForgeRun.getState().run?.steps[0]).toBe("stopped");
     expect(useForgeRun.getState().run?.outcome).toBe("stopped");
     stop();
+  });
+
+  it("keeps the outcome of a workflow that finishes before forge_run returns", async () => {
+    const { startForge, useForgeRun } = await import("./forge");
+    const stop = await startForge();
+    dispatch(event("w", "depot.workspace_opened", "depot"));
+    // depot-core runs the whole workflow, and its events arrive, before the
+    // IPC call that started it has returned.
+    ipcMock.forgeRun.mockImplementationOnce(async (_index, runId) => {
+      dispatch({ id: "f1", type: "forge.run_finished", source: "forge", workspace: "w", ts: "", payload: { run_id: runId, outcome: "completed", failed_steps: 0, duration_ms: 1 } } as AnyBusEvent);
+      return runId;
+    });
+    await useForgeRun.getState().start(0);
+    expect(useForgeRun.getState().run?.outcome).toBe("completed");
+    stop();
+  });
+
+  it("forgets a run that depot-core refused to start", async () => {
+    const { useForgeRun } = await import("./forge");
+    ipcMock.forgeRun.mockRejectedValueOnce({ kind: "invalid", message: "path is empty" });
+    await expect(useForgeRun.getState().start(0)).rejects.toMatchObject({ kind: "invalid" });
+    expect(useForgeRun.getState().run).toBeNull();
+  });
+});
+
+describe("stream lines", () => {
+  it("are shown only in the workspace that produced them", () => {
+    dispatch(event("a", "depot.workspace_opened", "depot"));
+    expect(isStreamForActiveWorkspace({ workspace: "a" })).toBe(true);
+    expect(isStreamForActiveWorkspace({ workspace: "b" })).toBe(false);
+    expect(isStreamForActiveWorkspace({})).toBe(true);
   });
 });

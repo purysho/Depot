@@ -15,7 +15,7 @@
 //! - Third-party plugins cannot publish bus events; Depot records each launch
 //!   itself (`depot.plugin_launched`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -89,11 +89,19 @@ struct Handoff {
     args: Vec<String>,
 }
 
-/// What the person approved when enabling a plugin.
+/// What the person approved when enabling a plugin: the command as shown,
+/// and where it lives. Text alone is not enough: `./bin/tool` in another
+/// folder with the same id is a different program, so the plugin's folder and
+/// the executable the program resolved to are part of the approval. Older
+/// approvals without them match nothing and must be given again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approval {
     pub program: String,
     pub args: Vec<String>,
+    #[serde(default)]
+    pub folder: PathBuf,
+    #[serde(default)]
+    pub executable: PathBuf,
 }
 
 /// One discovered plugin, valid or not, as shown in Settings and the sidebar.
@@ -108,6 +116,8 @@ pub struct PluginInfo {
     pub color: String,
     pub folder: PathBuf,
     pub program: String,
+    /// Where `program` resolved to (canonical), when it was found.
+    pub executable: Option<PathBuf>,
     pub args: Vec<String>,
     pub workspace_scoped: bool,
     pub enabled: bool,
@@ -115,6 +125,23 @@ pub struct PluginInfo {
     pub needs_approval: bool,
     /// Why the manifest cannot be used; the plugin is listed but cannot run.
     pub error: Option<String>,
+}
+
+impl PluginInfo {
+    /// The approval enabling this plugin as it is now would record. `None`
+    /// when it cannot be enabled (its manifest is wrong or its program is
+    /// missing).
+    pub fn approval(&self) -> Option<Approval> {
+        if self.error.is_some() {
+            return None;
+        }
+        Some(Approval {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            folder: self.folder.clone(),
+            executable: self.executable.clone()?,
+        })
+    }
 }
 
 pub fn plugins_dir(home: &Path) -> PathBuf {
@@ -186,10 +213,15 @@ fn check(manifest: &Manifest, depot_version: &str) -> std::result::Result<(), St
 /// with their error so the person can see why a plugin does not appear.
 pub fn discover(home: &Path, approved: &BTreeMap<String, Approval>, depot_version: &str) -> Vec<PluginInfo> {
     let Ok(entries) = fs::read_dir(plugins_dir(home)) else { return Vec::new() };
-    let mut folders: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_dir()).collect();
+    let mut folders: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .map(|p| fs::canonicalize(&p).unwrap_or(p))
+        .collect();
     folders.sort();
-    let mut seen = std::collections::HashSet::new();
-    folders
+    folders.dedup();
+    // (plugin, whether its manifest parsed: only those claim their id)
+    let mut plugins: Vec<(PluginInfo, bool)> = folders
         .into_iter()
         .map(|folder| {
             let fallback_id = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -197,7 +229,7 @@ pub fn discover(home: &Path, approved: &BTreeMap<String, Approval>, depot_versio
                 .map_err(|_| format!("no {MANIFEST} in this folder"))
                 .and_then(|text| serde_json::from_str::<Manifest>(&text).map_err(|e| format!("{MANIFEST}: {e}")));
             match parsed {
-                Err(error) => PluginInfo {
+                Err(error) => (PluginInfo {
                     id: fallback_id.clone(),
                     name: fallback_id,
                     version: String::new(),
@@ -207,25 +239,27 @@ pub fn discover(home: &Path, approved: &BTreeMap<String, Approval>, depot_versio
                     color: "#6e7681".into(),
                     folder,
                     program: String::new(),
+                    executable: None,
                     args: Vec::new(),
                     workspace_scoped: false,
                     enabled: false,
                     needs_approval: false,
                     error: Some(error),
-                },
+                }, false),
                 Ok(m) => {
                     let mut error = check(&m, depot_version).err();
-                    if error.is_none() && !seen.insert(m.id.clone()) {
-                        error = Some(format!("another plugin already uses the id {}", m.id));
-                    }
                     let handoff = m.handoff.clone().unwrap_or_default();
                     let program = handoff.program.unwrap_or_default();
-                    let current = Approval { program: program.clone(), args: handoff.args.clone() };
-                    let approval = approved.get(&m.id);
-                    let ok = error.is_none();
-                    PluginInfo {
-                        enabled: ok && approval == Some(&current),
-                        needs_approval: ok && approval.is_some_and(|a| a != &current),
+                    let mut executable = None;
+                    if error.is_none() {
+                        match resolve_program(&program, &folder).and_then(|p| Ok(fs::canonicalize(&p)?)) {
+                            Ok(path) => executable = Some(path),
+                            Err(e) => error = Some(e.message),
+                        }
+                    }
+                    (PluginInfo {
+                        enabled: false,
+                        needs_approval: false,
                         id: m.id,
                         name: m.name,
                         version: m.version,
@@ -235,14 +269,32 @@ pub fn discover(home: &Path, approved: &BTreeMap<String, Approval>, depot_versio
                         color: m.panel.color,
                         folder,
                         program,
+                        executable,
                         args: handoff.args,
                         workspace_scoped: m.workspace_scoped,
                         error,
-                    }
+                    }, true)
                 }
             }
         })
-        .collect()
+        .collect();
+
+    // An id used by two folders is ambiguous: neither may run, whichever sorts
+    // first, or a new folder could take over an approved plugin's id.
+    let mut count: HashMap<String, usize> = HashMap::new();
+    for (p, _) in plugins.iter().filter(|(_, parsed)| *parsed) {
+        *count.entry(p.id.clone()).or_default() += 1;
+    }
+    for (p, parsed) in &mut plugins {
+        if *parsed && count.get(&p.id).copied().unwrap_or(0) > 1 {
+            p.error = Some(format!("more than one plugin folder uses the id {}; remove all but one", p.id));
+        }
+        let current = p.approval();
+        let approval = approved.get(&p.id);
+        p.enabled = current.is_some() && approval == current.as_ref();
+        p.needs_approval = current.is_some() && approval.is_some() && approval != current.as_ref();
+    }
+    plugins.into_iter().map(|(p, _)| p).collect()
 }
 
 /// Expand `{workspace.root}` and `{workspace.name}` in each argument. Each
@@ -293,7 +345,8 @@ pub fn launch(plugin: &PluginInfo, workspace: Option<&WorkspaceContext>) -> Resu
             format!("Enable {} in Settings first.", plugin.name)
         }));
     }
-    let program = resolve_program(&plugin.program, &plugin.folder)?;
+    // The executable that was approved, resolved when the list was read.
+    let program = plugin.executable.clone().ok_or_else(|| DepotError::not_found(format!("{} is not installed", plugin.program)))?;
     let args = expand_args(&plugin.args, workspace, plugin.workspace_scoped)?;
     let cwd = workspace.map(|w| w.root.clone()).unwrap_or_else(|| plugin.folder.clone());
     let mut child = Command::new(&program)
@@ -323,6 +376,22 @@ mod tests {
         fs::write(dir.join(MANIFEST), manifest.to_string()).unwrap();
     }
 
+    /// A stand-in program at `<plugin folder>/bin/tool`, which the manifest
+    /// names as `./bin/tool`.
+    fn tool(home: &Path, folder: &str) {
+        let bin = plugins_dir(home).join(folder).join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("tool"), "#!/bin/sh\n").unwrap();
+    }
+
+    fn approve(home: &Path, approved: &mut BTreeMap<String, Approval>) {
+        for p in discover(home, approved, "0.1.0") {
+            if let Some(a) = p.approval() {
+                approved.insert(p.id, a);
+            }
+        }
+    }
+
     fn manifest(id: &str, program: &str, args: &[&str]) -> serde_json::Value {
         json!({
             "id": id, "name": "Notes", "version": "1.0.0", "description": "Open the notes app.",
@@ -337,27 +406,67 @@ mod tests {
     #[test]
     fn valid_plugins_load_disabled_until_approved() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "notes", manifest("notes", "notes-app", &["--dir", "{workspace.root}"]));
+        write(dir.path(), "notes", manifest("notes", "./bin/tool", &["--dir", "{workspace.root}"]));
+        tool(dir.path(), "notes");
         let found = discover(dir.path(), &BTreeMap::new(), "0.1.0");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].error, None);
         assert!(!found[0].enabled);
+        assert!(found[0].executable.as_ref().unwrap().ends_with("bin/tool"));
 
         let mut approved = BTreeMap::new();
-        approved.insert("notes".to_string(), Approval { program: "notes-app".into(), args: vec!["--dir".into(), "{workspace.root}".into()] });
+        approve(dir.path(), &mut approved);
         assert!(discover(dir.path(), &approved, "0.1.0")[0].enabled);
     }
 
     #[test]
     fn a_changed_program_needs_approving_again() {
         let dir = tempfile::tempdir().unwrap();
-        write(dir.path(), "notes", manifest("notes", "something-else", &[]));
+        write(dir.path(), "notes", manifest("notes", "./bin/tool", &[]));
+        tool(dir.path(), "notes");
         let mut approved = BTreeMap::new();
-        approved.insert("notes".to_string(), Approval { program: "notes-app".into(), args: vec![] });
+        approve(dir.path(), &mut approved);
+        write(dir.path(), "notes", manifest("notes", "./bin/tool", &["--now-with-an-argument"]));
         let p = &discover(dir.path(), &approved, "0.1.0")[0];
         assert!(!p.enabled);
         assert!(p.needs_approval);
         assert!(launch(p, None).unwrap_err().message.contains("changed since it was enabled"));
+    }
+
+    #[test]
+    fn a_second_folder_with_the_same_id_and_command_does_not_inherit_the_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "z-notes", manifest("notes", "./bin/tool", &[]));
+        tool(dir.path(), "z-notes");
+        let mut approved = BTreeMap::new();
+        approve(dir.path(), &mut approved);
+        assert!(discover(dir.path(), &approved, "0.1.0")[0].enabled);
+
+        // Same id, same command text, earlier-sorting folder, different program.
+        write(dir.path(), "a-notes", manifest("notes", "./bin/tool", &[]));
+        tool(dir.path(), "a-notes");
+        let found = discover(dir.path(), &approved, "0.1.0");
+        assert_eq!(found.len(), 2);
+        for p in &found {
+            assert!(!p.enabled, "{} must not run", p.folder.display());
+            assert!(p.error.as_deref().unwrap_or_default().contains("more than one plugin folder"));
+        }
+
+        // With z-notes gone, a-notes alone still needs approving: the approval
+        // was for z-notes' folder and program.
+        fs::remove_dir_all(plugins_dir(dir.path()).join("z-notes")).unwrap();
+        let a = &discover(dir.path(), &approved, "0.1.0")[0];
+        assert!(!a.enabled);
+        assert!(a.needs_approval);
+    }
+
+    #[test]
+    fn a_missing_program_is_reported_and_cannot_be_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "notes", manifest("notes", "./bin/tool", &[]));
+        let p = &discover(dir.path(), &BTreeMap::new(), "0.1.0")[0];
+        assert!(p.error.as_deref().unwrap().contains("Program not found"));
+        assert_eq!(p.approval(), None);
     }
 
     #[test]
@@ -388,8 +497,8 @@ mod tests {
         assert!(error("c").contains("unknown placeholder"));
         assert!(error("d").contains("needs Depot 9.0.0"));
         assert!(error("e").contains("unknown field"));
-        assert_eq!(error("f"), "");
-        assert!(error("g").contains("already uses the id"));
+        assert!(error("f").contains("more than one plugin folder"));
+        assert!(error("g").contains("more than one plugin folder"));
         assert!(error("h").contains("cannot publish"));
         assert!(error("empty").contains("no depot.plugin.json"));
     }
@@ -423,7 +532,7 @@ mod tests {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         write(dir.path(), "echo", manifest("echo", "./bin/record", &["{workspace.name}", "$(whoami); echo hi"]));
         let mut approved = BTreeMap::new();
-        approved.insert("echo".to_string(), Approval { program: "./bin/record".into(), args: vec!["{workspace.name}".into(), "$(whoami); echo hi".into()] });
+        approve(dir.path(), &mut approved);
         let plugin = discover(dir.path(), &approved, "0.1.0").remove(0);
         let ws = WorkspaceContext {
             schema_version: 1,

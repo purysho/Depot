@@ -59,7 +59,12 @@ export function PluginSettings() {
               {p.error ? (
                 <p className="m-0 text-sm text-error">{p.error}</p>
               ) : (
-                <code className="block overflow-x-auto font-mono text-xs text-text-secondary">{commandLine(p)}</code>
+                <>
+                  <code className="block overflow-x-auto font-mono text-xs text-text-secondary">{commandLine(p)}</code>
+                  {p.executable && p.executable !== p.program ? (
+                    <p className="m-0 text-xs text-text-secondary">Runs {p.executable}</p>
+                  ) : null}
+                </>
               )}
             </li>
           );

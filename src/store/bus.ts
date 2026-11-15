@@ -31,6 +31,11 @@ export function isForActiveWorkspace(event: AnyBusEvent): boolean {
   return event.workspace === activeWorkspace;
 }
 
+/** The same check for a UI stream line (`depot://stream`). */
+export function isStreamForActiveWorkspace(message: { workspace?: string | null }): boolean {
+  return !message.workspace || activeWorkspace === null || message.workspace === activeWorkspace;
+}
+
 /** Deliver one event to local subscribers. Exported for tests. */
 export function dispatch(event: AnyBusEvent): void {
   if (event.type === "depot.workspace_opened") activeWorkspace = event.payload.name;

@@ -21,6 +21,12 @@ export interface ForgeRun {
 interface ForgeStore {
   run: ForgeRun | null;
   begin: (runId: string, workflowIndex: number | null) => void;
+  /**
+   * Start a workflow. The run is registered before depot-core is asked to
+   * start it: a fast workflow can finish before the request returns, and its
+   * events must find the run already here.
+   */
+  start: (workflowIndex: number) => Promise<void>;
   /** After a window reload: pick up a run depot-core is still executing. */
   reattach: () => Promise<void>;
   update: (runId: string, change: (run: ForgeRun) => Partial<ForgeRun>) => void;
@@ -31,6 +37,17 @@ const LOG_LINES = 500;
 export const useForgeRun = create<ForgeStore>((set, get) => ({
   run: null,
   begin: (runId, workflowIndex) => set({ run: { runId, workflowIndex, log: [], steps: {}, failedPid: {}, outcome: null } }),
+  start: async (workflowIndex) => {
+    const runId = crypto.randomUUID().replaceAll("-", "");
+    get().begin(runId, workflowIndex);
+    try {
+      await ipc.forgeRun(workflowIndex, runId);
+    } catch (e) {
+      // Refused before it started (a blank path, say): there is no run.
+      if (get().run?.runId === runId) set({ run: null });
+      throw e;
+    }
+  },
   reattach: async () => {
     if (get().run) return;
     try {
